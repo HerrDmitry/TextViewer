@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>WinExe</OutputType>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>TextViewer</RootNamespace>
+    <AssemblyName>TextViewer</AssemblyName>
+    <!-- Single-file publishing configuration -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <RuntimeIdentifiers>win-x64;osx-x64;osx-arm64;linux-x64</RuntimeIdentifiers>
+    <!-- Embed wwwroot as resources instead of copying as content files -->
+    <GenerateEmbeddedFilesManifest>true</GenerateEmbeddedFilesManifest>
+    <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Photino.Blazor" Version="4.0.13" />
+    <PackageReference Include="Microsoft.Extensions.FileProviders.Embedded" Version="9.0.1" />
+  </ItemGroup>
+
+  <!-- Embed wwwroot files as resources so everything is in the single executable -->
+  <ItemGroup>
+    <Content Remove="wwwroot\**" />
+    <EmbeddedResource Include="wwwroot\**" />
+    <Content Remove="ClientApp\**" />
+    <None Remove="ClientApp\**" />
+  </ItemGroup>
+
+  <!-- Bundle TypeScript to wwwroot before every C# build -->
+  <Target Name="BuildAngular" BeforeTargets="BeforeBuild">
+    <Message Importance="high" Text="Bundling TypeScript with esbuild..." />
+    <Exec Command="ClientApp\vendor\esbuild\esbuild.exe ClientApp/src/main.ts --bundle --outfile=wwwroot/main.js --format=iife --target=es2022" />
+    <Copy SourceFiles="ClientApp/src/styles.css" DestinationFiles="wwwroot/styles.css" />
+  </Target>
+
+</Project>

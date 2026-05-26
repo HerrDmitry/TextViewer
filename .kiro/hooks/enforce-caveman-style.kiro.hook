@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "name": "Enforce Caveman Ultra",
+  "description": "Reminds the agent on every prompt to use caveman-ultra communication style from steering",
+  "version": "1",
+  "when": {
+    "type": "promptSubmit"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "REMINDER: Use caveman-ultra style in ALL responses. Terse, no filler, abbreviate prose words, arrows for causality, fragments OK. Technical terms exact. Code unchanged. Read .kiro/steering/caveman-ultra.md if unsure."
+  }
+}

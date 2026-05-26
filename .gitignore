@@ -1,0 +1,77 @@
+## .NET
+bin/
+obj/
+publish/
+*.dll
+*.exe
+*.pdb
+*.user
+*.suo
+*.cache
+*.docstates
+*.nupkg
+*.snupkg
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+## .NET publish output
+publish/
+
+## NuGet
+**/[Pp]ackages/*
+!**/[Pp]ackages/build/
+*.nuget.props
+*.nuget.targets
+
+## MSBuild
+*.log
+msbuild.binlog
+
+## Visual Studio Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+## JetBrains Rider / IntelliJ
+.idea/
+*.sln.iml
+
+## Visual Studio
+.vs/
+*.rsuser
+*.userosscache
+*.sln.docstates
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Ll]og/
+[Ll]ogs/
+
+## OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+## Temp
+*.tmp
+*.temp
+.tmp/
+
+## Vendored dependencies (downloaded per .kiro/steering/vendor.md)
+ClientApp/vendor/
+
+## Generated build output (esbuild + copy)
+wwwroot/main.js
+wwwroot/styles.css
+
+## .NET local tools manifest
+.config/
