@@ -1,24 +1,31 @@
 {
+  "compileOnSave": false,
   "compilerOptions": {
+    "outDir": "./dist/out-tsc",
+    "strict": true,
+    "noImplicitOverride": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "sourceMap": true,
+    "declaration": false,
+    "downlevelIteration": true,
+    "experimentalDecorators": true,
+    "moduleResolution": "bundler",
+    "importHelpers": true,
     "target": "ES2022",
     "module": "ES2022",
-    "moduleResolution": "node",
+    "useDefineForClassFields": false,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "outDir": "../wwwroot",
-    "rootDir": "src",
-    "strict": true,
-    "esModuleInterop": true,
-    "experimentalDecorators": true,
-    "emitDecoratorMetadata": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "declaration": false,
-    "sourceMap": false,
-    "baseUrl": ".",
-    "paths": {
-      "@angular/core": ["vendor/@angular/core"],
-      "@angular/platform-browser": ["vendor/@angular/platform-browser"]
-    }
+    "esModuleInterop": true
+  },
+  "angularCompilerOptions": {
+    "enableI18nLegacyMessageIdFormat": false,
+    "strictInjectionParameters": true,
+    "strictInputAccessModifiers": true,
+    "strictTemplates": true
   },
   "include": ["src/**/*.ts"],
   "exclude": ["node_modules"]

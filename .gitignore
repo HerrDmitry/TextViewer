@@ -66,12 +66,18 @@ desktop.ini
 *.temp
 .tmp/
 
-## Vendored dependencies (downloaded per .kiro/steering/vendor.md)
-ClientApp/vendor/
+## npm
+ClientApp/node_modules/
+ClientApp/.angular/
 
-## Generated build output (esbuild + copy)
+## Angular CLI build output in wwwroot (generated — only index.html is source)
 wwwroot/main.js
+wwwroot/polyfills.js
 wwwroot/styles.css
+wwwroot/chunk-*.js
+wwwroot/media/
+wwwroot/3rdpartylicenses.txt
+wwwroot/prerendered-routes.json
 
 ## .NET local tools manifest
 .config/
