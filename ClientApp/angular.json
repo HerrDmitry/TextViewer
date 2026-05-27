@@ -1,12 +1,9 @@
 {
-  "_comment": [
-    "This file documents the Angular build configuration for this project.",
-    "NOTE: This project does NOT use the Angular CLI (ng build). TypeScript",
-    "compilation is handled by 'node tsc.js --project ClientApp/tsconfig.json'",
-    "invoked via MSBuild targets. This file serves as documentation of the",
-    "expected build output structure and configuration intent."
-  ],
   "version": 1,
+  "cli": {
+    "analytics": false,
+    "schematicCollections": ["@angular/cli"]
+  },
   "newProjectRoot": "projects",
   "projects": {
     "text-viewer": {
@@ -17,21 +14,24 @@
         "build": {
           "builder": "@angular-devkit/build-angular:application",
           "options": {
-            "outputPath": "../wwwroot/",
+            "outputPath": {
+              "base": "../wwwroot",
+              "browser": ""
+            },
             "index": false,
+            "deleteOutputPath": false,
             "browser": "src/main.ts",
-            "polyfills": "src/polyfills.ts",
+            "polyfills": ["zone.js"],
             "tsConfig": "tsconfig.json",
             "assets": [],
             "styles": [
               "src/styles.css"
             ],
-            "scripts": [
-              "src/runtime.ts"
-            ]
+            "scripts": []
           },
           "configurations": {
             "production": {
+              "budgets": [],
               "optimization": false,
               "outputHashing": "none",
               "sourceMap": false
@@ -39,15 +39,13 @@
             "development": {
               "optimization": false,
               "outputHashing": "none",
-              "sourceMap": true
+              "sourceMap": true,
+              "extractLicenses": false
             }
           },
           "defaultConfiguration": "production"
         }
       }
     }
-  },
-  "cli": {
-    "analytics": false
   }
 }

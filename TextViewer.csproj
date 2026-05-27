@@ -30,11 +30,12 @@
     <None Remove="ClientApp\**" />
   </ItemGroup>
 
-  <!-- Bundle TypeScript to wwwroot before every C# build -->
+  <!-- Build Angular app before C# build -->
   <Target Name="BuildAngular" BeforeTargets="BeforeBuild">
-    <Message Importance="high" Text="Bundling TypeScript with esbuild..." />
-    <Exec Command="ClientApp\vendor\esbuild\esbuild.exe ClientApp/src/main.ts --bundle --outfile=wwwroot/main.js --format=iife --target=es2022" />
-    <Copy SourceFiles="ClientApp/src/styles.css" DestinationFiles="wwwroot/styles.css" />
+    <Message Importance="high" Text="Building Angular application..." />
+    <!-- Install npm deps if node_modules missing -->
+    <Exec Command="npm ci" WorkingDirectory="ClientApp" Condition="!Exists('ClientApp\node_modules')" />
+    <Exec Command="npx ng build --configuration production" WorkingDirectory="ClientApp" />
   </Target>
 
 </Project>
