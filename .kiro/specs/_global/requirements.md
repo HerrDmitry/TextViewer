@@ -1,19 +1,39 @@
-# Requirements Document
+# Global Requirements
 
 #[[file:.kiro/specs/_global/requirements-shared.md]]
 
 ## Introduction
 
-Open File Dialog feature. User presses Ctrl+O → system open-file dialog appears → user picks file → selected file name replaces "Hello World" message in UI. Bridges Angular frontend (keyboard shortcut, display) with .NET backend (native dialog) via Photino Message_Bridge.
+TextViewer is a cross-platform desktop application for viewing text content. This document captures all shipped product requirements. Infrastructure/platform context provided by requirements-shared.md.
 
 ## Glossary
 
 - **Open_File_Dialog**: The native operating system file-selection dialog provided by the OS
 - **Display_Area**: The UI region in app.component.html showing current text content
+- **Hello_World_View**: The initial view displayed to the user upon application launch
 
 ## Requirements
 
-### Requirement 1: Keyboard Shortcut Detection
+### Requirement 1: Application Window Configuration
+
+**User Story:** As a user, I want the application window to have a reasonable default size and title, so that it looks like a proper desktop application.
+
+#### Acceptance Criteria
+
+1. THE Photino_Window SHALL display a title of "Text Viewer" in the window title bar
+2. THE Photino_Window SHALL open with a default size that is appropriate for the user's display
+3. THE Photino_Window SHALL be resizable by the user
+
+### Requirement 2: Hello World Display
+
+**User Story:** As a user, I want to see a "Hello World" message when the application starts, so that I can confirm the application is working correctly.
+
+#### Acceptance Criteria
+
+1. WHEN the Photino_Window finishes loading, THE Angular_Frontend SHALL display the text "Hello World" in the Hello_World_View
+2. THE Hello_World_View SHALL be the default view rendered on application startup
+
+### Requirement 3: Keyboard Shortcut — Open File
 
 **User Story:** As a user, I want to press Ctrl+O to open a file, so that I can quickly select a file to view.
 
@@ -24,7 +44,7 @@ Open File Dialog feature. User presses Ctrl+O → system open-file dialog appear
 3. THE Frontend SHALL prevent the browser default behavior for the Ctrl+O (or Cmd+O) key combination regardless of dialog state
 4. WHEN the Frontend receives a file-selection response from the Backend via the Message_Bridge, THE Frontend SHALL transition out of the awaiting-response state and resume accepting Ctrl+O (or Cmd+O) key presses
 
-### Requirement 2: Native File Dialog Invocation
+### Requirement 4: Native File Dialog Invocation
 
 **User Story:** As a user, I want to see the standard OS file dialog, so that I can browse and select a file using familiar system UI.
 
@@ -36,7 +56,7 @@ Open File Dialog feature. User presses Ctrl+O → system open-file dialog appear
 4. WHEN the user cancels the Open_File_Dialog, THE Backend SHALL send an empty string to the Frontend via the Message_Bridge
 5. IF the Backend receives an "open-file" message while the Open_File_Dialog is already displayed, THEN THE Backend SHALL ignore the message and not open a second dialog
 
-### Requirement 3: File Path Display
+### Requirement 5: File Path Display
 
 **User Story:** As a user, I want to see the full path of the selected file in the UI, so that I have confirmation of which file I chose and where it is located.
 
@@ -45,7 +65,7 @@ Open File Dialog feature. User presses Ctrl+O → system open-file dialog appear
 1. WHEN the Frontend receives a non-empty string from the Message_Bridge, THE Frontend SHALL replace the Display_Area content with the full string value as received
 2. WHEN the Frontend receives an empty string from the Message_Bridge, THE Frontend SHALL retain the current Display_Area content unchanged
 
-### Requirement 4: Initial State
+### Requirement 6: Initial Display State
 
 **User Story:** As a user, I want to see a default message when no file has been selected, so that I know the application is ready.
 

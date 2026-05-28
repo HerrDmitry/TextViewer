@@ -25,6 +25,13 @@ TextViewer/
 │   └── node_modules/           # npm install output (gitignored)
 └── .kiro/
     ├── specs/
+    │   ├── _global/                    # Product-wide docs
+    │   │   ├── requirements.md         # Full product reqs (all shipped features)
+    │   │   ├── requirements-shared.md  # Infra/platform context (ref'd by feature specs)
+    │   │   ├── design.md              # Full product design (all shipped features)
+    │   │   └── design-shared.md       # Arch/patterns context (ref'd by feature specs)
+    │   ├── open-file-dialog/           # Feature spec (refs *-shared.md)
+    │   └── viewer-app/                 # Feature spec (refs *-shared.md)
     └── steering/
 ```
 
@@ -37,3 +44,34 @@ TextViewer/
 - **Angular CLI builds to IIFE-equivalent**: Output is standard ES module chunks, loaded via script tags
 - **Embedded resources**: All `wwwroot/**` embedded in assembly for single-file deployment
 - **No vendored binaries**: All tooling via npm
+
+## Spec Structure Conventions
+
+- **`_global/requirements-shared.md`**: Infra/platform context (tech stack, deploy model, communication model, glossary). Referenced by ALL feature specs and global docs.
+- **`_global/design-shared.md`**: Architecture layers, build pipeline, error handling patterns, design conventions. Referenced by ALL feature specs and global docs.
+- **`_global/requirements.md`**: Full product requirements (all shipped features combined). Updated when a feature ships.
+- **`_global/design.md`**: Full product design (all shipped features combined). Updated when a feature ships.
+
+### New Feature Spec Template
+
+Every new feature spec MUST include these refs at the top of its files:
+
+**`requirements.md`:**
+```
+#[[file:.kiro/specs/_global/requirements-shared.md]]
+```
+
+**`design.md`:**
+```
+#[[file:.kiro/specs/_global/design-shared.md]]
+```
+
+Feature specs contain ONLY feature-specific behavioral requirements and design. Do NOT duplicate infra/platform content from shared files.
+
+### Lifecycle
+
+1. Create feature folder in `.kiro/specs/<feature-name>/`
+2. Add `requirements.md` with shared ref + feature-only reqs
+3. Add `design.md` with shared ref + feature-only design
+4. Add `tasks.md` with implementation tasks
+5. When feature ships → merge behavioral reqs into `_global/requirements.md`, merge design into `_global/design.md`
