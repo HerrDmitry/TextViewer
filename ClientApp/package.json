@@ -7,7 +7,8 @@
     "build": "ng build --configuration production",
     "build:dev": "ng build --configuration development",
     "watch": "ng build --watch --configuration development",
-    "test": "ng test",
+    "test": "jest",
+    "test:property": "jest --testPathPattern=property\\.spec\\.ts",
     "check-versions": "node scripts/check-version-policy.mjs",
     "check-versions:strict": "node scripts/check-version-policy.mjs --min-gap 3"
   },
@@ -28,6 +29,11 @@
     "@angular-devkit/build-angular": "19.2.16",
     "@angular/cli": "19.2.16",
     "@angular/compiler-cli": "19.2.14",
+    "@types/jest": "29.5.14",
+    "fast-check": "4.5.3",
+    "jest": "29.7.0",
+    "jest-environment-jsdom": "29.7.0",
+    "ts-jest": "29.2.5",
     "typescript": "5.7.3"
   }
 }
