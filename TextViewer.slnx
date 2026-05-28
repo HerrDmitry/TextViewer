@@ -1,0 +1,17 @@
+<Solution>
+  <Project Path="TextViewer.csproj" />
+  <Folder Name="/ClientApp/">
+    <File Path="ClientApp/package.json" />
+    <File Path="ClientApp/angular.json" />
+    <File Path="ClientApp/tsconfig.json" />
+    <File Path="ClientApp/.npmrc" />
+  </Folder>
+  <Folder Name="/ClientApp/src/">
+    <File Path="ClientApp/src/main.ts" />
+    <File Path="ClientApp/src/styles.css" />
+  </Folder>
+  <Folder Name="/ClientApp/src/app/">
+    <File Path="ClientApp/src/app/app.component.ts" />
+    <File Path="ClientApp/src/app/app.component.html" />
+  </Folder>
+</Solution>

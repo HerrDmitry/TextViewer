@@ -2,6 +2,7 @@
 
 ```
 TextViewer/
+├── TextViewer.slnx             # XML solution file (Rider/VS — references .csproj + ClientApp folder)
 ├── Program.cs                  # .NET entry point — configures PhotinoBlazorAppBuilder, window props
 ├── App.razor                   # Blazor root component (mounted into #app in index.html)
 ├── TextViewer.csproj           # MSBuild project file (.NET 10, Photino.Blazor, ng build target)
