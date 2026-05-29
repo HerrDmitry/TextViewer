@@ -79,6 +79,38 @@ graph LR
 | Build-time failures | MSBuild target fails → blocks build |
 | Message Bus errors | See `design-bus-service.md` error handling table |
 
+## Result Type Pattern
+
+All operations that can fail or produce structured outcomes SHALL use `Result<T, E>` (`Services/Result.cs`) instead of:
+- Nullable returns (ambiguous null)
+- Out parameters
+- Throwing exceptions for expected failures
+- Mutating state fields that callers must poll
+
+### When to use Result
+
+| Scenario | Use Result | Example |
+|----------|-----------|---------|
+| Parse/decode that can fail | Yes | `MessageProtocol.Decode` → `Result<MessageEnvelope, DecodeError>` |
+| Async operation w/ known failure modes | Yes | `FileIndex.StartScanAsync` → `Task<Result<ScanSummary, ScanError>>` |
+| Dispatch/routing w/ validation pipeline | Yes | `MessageBusHost.DispatchMessageAsync` → `Result<DispatchOutcome, DispatchError>` |
+| Service method w/ domain errors | Yes | `FileViewService.GetViewAsync` → `Result<ViewResult, ViewError>` |
+| Infrastructure failure (unrecoverable) | No — throw | WebView init, DI resolution |
+| Void success w/ no meaningful outcome | No — use Task/void | Fire-and-forget sends |
+
+### Error type conventions
+
+- Use an **enum** for the error code (e.g. `DecodeError`, `ScanErrorCode`, `ViewErrorCode`, `DispatchErrorCode`)
+- Pair with a **record** carrying `(Code, Message)` when callers need human-readable context
+- Keep error enums small and specific to the operation — no god-enum
+- Name pattern: `{Operation}Error` or `{Operation}ErrorCode` + `{Operation}Error` record
+
+### Success type conventions
+
+- Use a **record** or **record struct** for structured success data (e.g. `MessageEnvelope`, `ScanSummary`, `ViewResult`)
+- Use an **enum** when success has discrete outcomes w/o data (e.g. `DispatchOutcome.ResponseSent`)
+- Prefer `readonly record struct` for small value-like results (≤3 fields, no heap alloc needed)
+
 ## Design Conventions
 
 - **Fail-fast on startup**: No recovery for infrastructure failures
