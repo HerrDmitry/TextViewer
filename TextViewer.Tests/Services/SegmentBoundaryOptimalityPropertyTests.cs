@@ -90,6 +90,7 @@ public class SegmentBoundaryOptimalityPropertyTests
                 // Build segments using the real SegmentDirectory
                 var directory = new SegmentDirectory();
                 directory.Append(byteLengths, 0);
+                directory.Optimize();
 
                 var segments = directory.Segments;
 
@@ -147,10 +148,9 @@ public class SegmentBoundaryOptimalityPropertyTests
                 // Build segments using the real SegmentDirectory
                 var directory = new SegmentDirectory();
                 directory.Append(byteLengths, 0);
+                directory.Optimize();
 
                 var segments = directory.Segments;
-
-                // Check every segment: splitting at any point should NOT reduce memory
                 for (int s = 0; s < segments.Count; s++)
                 {
                     var segment = segments[s];

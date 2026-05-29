@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Logging;
 using Photino.Blazor;
 using TextViewer.Services;
 
@@ -37,13 +38,33 @@ public class Program
                 var files = app.MainWindow.ShowOpenFile("Open File", "", false, null);
                 if (files != null && files.Length > 0 && !string.IsNullOrEmpty(files[0]))
                 {
-                    return files[0];
+                    var filePath = files[0];
+
+                    // Quick scan → find longest line (byte width)
+                    using var loggerFactory = LoggerFactory.Create(b => b.AddConsole().SetMinimumLevel(LogLevel.Debug));
+                    var logger = loggerFactory.CreateLogger<FileIndex>();
+                    using var fileIndex = new FileIndex(filePath, CancellationToken.None, logger);
+                    await fileIndex.StartScanAsync();
+
+                    if (fileIndex.State == ScanState.FullScanComplete)
+                    {
+                        ulong maxCharLen = 0;
+                        for (int i = 0; i < fileIndex.Index.LineCount; i++)
+                        {
+                            var cl = fileIndex.Index.GetCharLength(i);
+                            if (cl.HasValue && cl.Value > maxCharLen)
+                                maxCharLen = cl.Value;
+                        }
+                        return $"{filePath} | {fileIndex.Index.LineCount} lines | longest: {maxCharLen} chars";
+                    }
+
+                    return $"{filePath} | scan failed: {fileIndex.Error}";
                 }
                 return "";
             }
-            catch
+            catch (Exception ex)
             {
-                return "";
+                return $"ERROR: {ex.GetType().Name}: {ex.Message}";
             }
         });
 

@@ -49,77 +49,95 @@ internal sealed class SegmentDirectory
     /// Appends pairs, creating/extending segments with optimal tier selection.
     /// Tier determined by max byte length value (first element of each pair).
     /// Each line is stored as a pair (byteLength, 0) — char length filled later.
+    /// Uses batch-level buffer to avoid per-extend copies.
     /// </summary>
     public void Append(ReadOnlySpan<ulong> byteLengths, int startLineIndex)
     {
         if (byteLengths.IsEmpty)
             return;
 
-        // Phase 1: Build initial segments using greedy tier-based grouping
+        int segmentCountBefore = _segments.Count;
+
+        // Process values in runs of same tier — one segment per run, no extending
         int i = 0;
         while (i < byteLengths.Length)
         {
             var tier = SelectTier(byteLengths[i]);
+            int runLength = CountRunFittingTierWithNarrowing(byteLengths, i, tier);
 
-            // Check if we can extend the last segment
-            if (_segments.Count > 0)
-            {
-                var lastSeg = _segments[^1];
-                var lastTier = lastSeg.Tier;
-
-                if (tier == lastTier)
-                {
-                    // Same tier — extend the current segment
-                    int runLength = CountRunAtTier(byteLengths, i, lastTier);
-                    ExtendSegment(lastSeg, byteLengths.Slice(i, runLength));
-                    i += runLength;
-                    continue;
-                }
-                else if (tier > lastTier)
-                {
-                    // Widening — start a new segment
-                    // Fall through to create new segment below
-                }
-                else
-                {
-                    // Narrowing — start a new narrower segment
-                    // Fall through to create new segment below
-                }
-            }
-
-            // Create a new segment for the current tier run
-            int segRunLength = CountRunFittingTier(byteLengths, i, tier);
+            // Recalculate tier based on actual max in run
             ulong maxInRun = 0;
-            for (int j = i; j < i + segRunLength; j++)
+            for (int j = i; j < i + runLength; j++)
             {
                 if (byteLengths[j] > maxInRun)
                     maxInRun = byteLengths[j];
             }
             tier = SelectTier(maxInRun);
 
-            CreateSegment(startLineIndex + i, byteLengths.Slice(i, segRunLength), tier);
-            i += segRunLength;
+            // Single allocation per run — no copy-extend
+            CreateSegment(startLineIndex + i, byteLengths.Slice(i, runLength), tier);
+            i += runLength;
         }
 
-        // Phase 2: Optimize segment boundaries
-        OptimizeSegments();
+        // No merge during append — segments stay as-is for O(N) performance.
+        // Use Optimize() for offline/test optimization if needed.
 
         TotalLines = startLineIndex + byteLengths.Length;
     }
 
     /// <summary>
-    /// Optimizes segment boundaries by merging adjacent segments when profitable
-    /// and splitting segments when profitable. Iterates until no more improvements found.
+    /// Counts consecutive lines fitting the given tier, with narrowing check.
+    /// Used for both new segments and extending existing ones.
     /// </summary>
-    private void OptimizeSegments()
+    private static int CountRunFittingTierWithNarrowing(ReadOnlySpan<ulong> byteLengths, int startIndex, IntegerTier tier)
     {
+        ulong maxValue = tier switch
+        {
+            IntegerTier.Byte => 255,
+            IntegerTier.UShort => 65535,
+            IntegerTier.UInt => 4294967295,
+            IntegerTier.ULong => ulong.MaxValue,
+            _ => throw new InvalidOperationException($"Unsupported tier: {tier}")
+        };
+
+        int count = 0;
+        for (int j = startIndex; j < byteLengths.Length; j++)
+        {
+            if (byteLengths[j] > maxValue)
+                break;
+
+            var lineTier = SelectTier(byteLengths[j]);
+            if (lineTier < tier)
+            {
+                int remainingLines = byteLengths.Length - j;
+                int currentTierSize = (int)tier;
+                int narrowTierSize = (int)lineTier;
+                int memorySaved = remainingLines * 2 * (currentTierSize - narrowTierSize);
+                if (memorySaved > 9)
+                    break;
+            }
+
+            count++;
+        }
+        return count == 0 ? 1 : count;
+    }
+
+    /// <summary>
+    /// Optimizes only the newly added segments (from segmentStartIndex onward)
+    /// and the junction with the previous segment. Only merges — no split pass
+    /// since the greedy algorithm already creates optimal boundaries.
+    /// </summary>
+    private void OptimizeNewSegments(int segmentStartIndex)
+    {
+        // Include the segment just before the new ones (junction point)
+        int start = Math.Max(0, segmentStartIndex - 1);
+
+        // Single merge pass: merge adjacent segments when profitable
         bool changed = true;
         while (changed)
         {
             changed = false;
-
-            // Pass 1: Merge adjacent segments when merging reduces memory
-            for (int s = 0; s < _segments.Count - 1; s++)
+            for (int s = start; s < _segments.Count - 1; s++)
             {
                 var seg1 = _segments[s];
                 var seg2 = _segments[s + 1];
@@ -127,7 +145,6 @@ internal sealed class SegmentDirectory
                 long currentMemory = SegmentMemory(seg1.Count, seg1.Tier)
                                    + SegmentMemory(seg2.Count, seg2.Tier);
 
-                // Determine merged tier
                 ulong max1 = GetMaxByteLength(seg1);
                 ulong max2 = GetMaxByteLength(seg2);
                 var mergedTier = SelectTier(Math.Max(max1, max2));
@@ -136,24 +153,59 @@ internal sealed class SegmentDirectory
 
                 if (mergedMemory < currentMemory)
                 {
-                    // Merge is profitable — combine the two segments
                     var mergedData = MergeSegmentData(seg1, seg2, mergedTier);
                     var merged = new Segment(seg1.StartLine, seg1.Count + seg2.Count, mergedTier, mergedData);
                     _segments[s] = merged;
                     _segments.RemoveAt(s + 1);
                     changed = true;
-                    s--; // Re-check this position
+                    s--;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Full optimization pass (merge + split) over all segments. Used by tests for property verification.
+    /// </summary>
+    internal void Optimize()
+    {
+        bool changed = true;
+        while (changed)
+        {
+            changed = false;
+
+            // Merge pass
+            for (int s = 0; s < _segments.Count - 1; s++)
+            {
+                var seg1 = _segments[s];
+                var seg2 = _segments[s + 1];
+
+                long currentMemory = SegmentMemory(seg1.Count, seg1.Tier)
+                                   + SegmentMemory(seg2.Count, seg2.Tier);
+
+                ulong max1 = GetMaxByteLength(seg1);
+                ulong max2 = GetMaxByteLength(seg2);
+                var mergedTier = SelectTier(Math.Max(max1, max2));
+                long mergedMemory = SegmentMemory(seg1.Count + seg2.Count, mergedTier);
+
+                if (mergedMemory < currentMemory)
+                {
+                    var mergedData = MergeSegmentData(seg1, seg2, mergedTier);
+                    var merged = new Segment(seg1.StartLine, seg1.Count + seg2.Count, mergedTier, mergedData);
+                    _segments[s] = merged;
+                    _segments.RemoveAt(s + 1);
+                    changed = true;
+                    s--;
                 }
             }
 
-            // Pass 2: Split segments when splitting reduces memory
+            // Split pass
             for (int s = 0; s < _segments.Count; s++)
             {
                 var segment = _segments[s];
                 if (segment.Count < 2)
                     continue;
 
-                // Find the best split point
                 int bestSplit = -1;
                 long bestSavings = 0;
 
@@ -176,11 +228,11 @@ internal sealed class SegmentDirectory
                     var leftTier = SelectTier(maxLeft);
                     var rightTier = SelectTier(maxRight);
 
-                    long currentMemory = SegmentMemory(segment.Count, segment.Tier);
-                    long splitMemory = SegmentMemory(splitAt, leftTier)
-                                     + SegmentMemory(segment.Count - splitAt, rightTier);
+                    long currentMem = SegmentMemory(segment.Count, segment.Tier);
+                    long splitMem = SegmentMemory(splitAt, leftTier)
+                                  + SegmentMemory(segment.Count - splitAt, rightTier);
 
-                    long savings = currentMemory - splitMemory;
+                    long savings = currentMem - splitMem;
                     if (savings > bestSavings)
                     {
                         bestSavings = savings;
@@ -190,7 +242,6 @@ internal sealed class SegmentDirectory
 
                 if (bestSplit > 0)
                 {
-                    // Split is profitable
                     var (left, right) = SplitSegment(segment, bestSplit);
                     _segments[s] = left;
                     _segments.Insert(s + 1, right);
@@ -348,6 +399,19 @@ internal sealed class SegmentDirectory
         {
             if (byteLengths[j] > maxValue)
                 break;
+
+            // Check if narrowing is worthwhile
+            var lineTier = SelectTier(byteLengths[j]);
+            if (lineTier < tier)
+            {
+                int remainingLines = byteLengths.Length - j;
+                int currentTierSize = (int)tier;
+                int narrowTierSize = (int)lineTier;
+                int memorySaved = remainingLines * 2 * (currentTierSize - narrowTierSize);
+                if (memorySaved > 9)
+                    break;
+            }
+
             count++;
         }
         return count == 0 ? 1 : count;

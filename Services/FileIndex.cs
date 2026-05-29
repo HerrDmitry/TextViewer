@@ -272,61 +272,126 @@ public sealed class FileIndex : IDisposable
         // Seek back to start for sequential reading
         _stream.Seek(0, SeekOrigin.Begin);
 
-        // Process each line sequentially
+        // Use a single reusable buffer to avoid per-line allocations
+        const int BufferSize = 65536;
+        byte[] buffer = new byte[BufferSize];
+        int bufferOffset = 0;
+        int bufferFilled = 0;
+
         for (int lineIndex = 0; lineIndex < lineCount; lineIndex++)
         {
-            // Check cancellation periodically (every 100 lines for responsive cancellation)
-            if (lineIndex % 100 == 0)
+            if (lineIndex % 1000 == 0)
             {
                 _cancellationToken.ThrowIfCancellationRequested();
             }
 
-            ulong byteLength = Index.GetByteLength(lineIndex);
+            int byteLength = (int)Index.GetByteLength(lineIndex);
             if (byteLength == 0)
             {
                 Index.SetCharLength(lineIndex, 0);
                 continue;
             }
 
-            // Read the line's bytes from the stream
-            int bytesToRead = (int)byteLength;
-            byte[] lineBytes = new byte[bytesToRead];
-            int totalRead = 0;
-            while (totalRead < bytesToRead)
+            // We need to read the line bytes to know the delimiter, so read into buffer
+            int contentLength = 0;
+            int contentStart = 0;
+
+            // For lines that fit in buffer, decode directly
+            // For lines larger than buffer, accumulate via decoder
+            if (byteLength <= BufferSize)
+            {
+                // Ensure we have enough bytes in buffer
+                await EnsureBufferAsync(buffer, byteLength);
+                
+                int delimiterBytes = GetDelimiterByteCount(buffer, bufferOffset, byteLength);
+                contentStart = bufferOffset;
+                contentLength = byteLength - delimiterBytes;
+
+                // Exclude BOM from first line
+                if (lineIndex == 0 && bomByteLength > 0 && contentLength >= bomByteLength)
+                {
+                    contentStart += bomByteLength;
+                    contentLength -= bomByteLength;
+                }
+
+                ulong charLength = 0;
+                if (contentLength > 0)
+                {
+                    charLength = (ulong)decoderEncoding.GetCharCount(buffer, contentStart, contentLength);
+                }
+                Index.SetCharLength(lineIndex, charLength);
+                bufferOffset += byteLength;
+            }
+            else
+            {
+                // Large line: read in chunks, count chars
+                int remaining = byteLength;
+                int charCount = 0;
+                bool isFirstSegment = true;
+                var decoder = decoderEncoding.GetDecoder();
+
+                while (remaining > 0)
+                {
+                    await EnsureBufferAsync(buffer, Math.Min(remaining, BufferSize));
+                    int chunkSize = Math.Min(remaining, bufferFilled - bufferOffset);
+
+                    int start = bufferOffset;
+                    int len = chunkSize;
+
+                    // Last chunk: exclude delimiter
+                    if (remaining == chunkSize)
+                    {
+                        int delimiterBytes = GetDelimiterByteCount(buffer, bufferOffset, chunkSize);
+                        len -= delimiterBytes;
+                    }
+
+                    // First chunk of first line: exclude BOM
+                    if (lineIndex == 0 && isFirstSegment && bomByteLength > 0 && len >= bomByteLength)
+                    {
+                        start += bomByteLength;
+                        len -= bomByteLength;
+                    }
+
+                    if (len > 0)
+                    {
+                        bool flush = (remaining == chunkSize);
+                        charCount += decoder.GetCharCount(buffer, start, len, flush);
+                    }
+
+                    bufferOffset += chunkSize;
+                    remaining -= chunkSize;
+                    isFirstSegment = false;
+                }
+
+                Index.SetCharLength(lineIndex, (ulong)charCount);
+            }
+        }
+
+        // Local helper: ensure buffer has at least 'needed' bytes available from bufferOffset
+        async Task EnsureBufferAsync(byte[] buf, int needed)
+        {
+            int available = bufferFilled - bufferOffset;
+            if (available >= needed)
+                return;
+
+            // Shift remaining bytes to start of buffer
+            if (available > 0)
+            {
+                Buffer.BlockCopy(buf, bufferOffset, buf, 0, available);
+            }
+            bufferOffset = 0;
+            bufferFilled = available;
+
+            // Fill buffer
+            while (bufferFilled < needed)
             {
                 int read = await _stream.ReadAsync(
-                    lineBytes.AsMemory(totalRead, bytesToRead - totalRead),
+                    buf.AsMemory(bufferFilled, buf.Length - bufferFilled),
                     _cancellationToken);
                 if (read == 0)
                     break;
-                totalRead += read;
+                bufferFilled += read;
             }
-
-            // Determine delimiter bytes at end of this line
-            int delimiterBytes = GetDelimiterByteCount(lineBytes, totalRead);
-
-            // Content bytes = total bytes minus delimiter bytes
-            int contentStart = 0;
-            int contentLength = totalRead - delimiterBytes;
-
-            // For the first line, exclude BOM bytes from content
-            if (lineIndex == 0 && bomByteLength > 0 && contentLength >= bomByteLength)
-            {
-                contentStart = bomByteLength;
-                contentLength -= bomByteLength;
-            }
-
-            if (contentLength <= 0)
-            {
-                Index.SetCharLength(lineIndex, 0);
-                continue;
-            }
-
-            // Decode content bytes to string and get char length
-            string decoded = decoderEncoding.GetString(lineBytes, contentStart, contentLength);
-            ulong charLength = (ulong)decoded.Length;
-
-            Index.SetCharLength(lineIndex, charLength);
         }
     }
 
@@ -358,21 +423,23 @@ public sealed class FileIndex : IDisposable
     /// Determines the number of delimiter bytes at the end of a line's byte buffer.
     /// Returns 2 for CRLF, 1 for LF or CR, 0 for no delimiter (final unterminated line).
     /// </summary>
-    private static int GetDelimiterByteCount(byte[] lineBytes, int length)
+    private static int GetDelimiterByteCount(byte[] buffer, int offset, int length)
     {
         if (length == 0)
             return 0;
 
+        int end = offset + length;
+
         // Check for CRLF (last two bytes are 0x0D 0x0A)
-        if (length >= 2 && lineBytes[length - 2] == 0x0D && lineBytes[length - 1] == 0x0A)
+        if (length >= 2 && buffer[end - 2] == 0x0D && buffer[end - 1] == 0x0A)
             return 2;
 
         // Check for LF
-        if (lineBytes[length - 1] == 0x0A)
+        if (buffer[end - 1] == 0x0A)
             return 1;
 
         // Check for CR
-        if (lineBytes[length - 1] == 0x0D)
+        if (buffer[end - 1] == 0x0D)
             return 1;
 
         // No delimiter (final unterminated line)

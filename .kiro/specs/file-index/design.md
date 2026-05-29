@@ -390,13 +390,20 @@ function selectTier(maxByteLength: ulong) -> IntegerTier:
 
 ### Segment Boundary Decision
 
-A new segment starts when:
-1. The next line's Byte_Length requires a **wider** tier than the current segment, OR
-2. The next line's Byte_Length could use a **narrower** tier AND the memory saved by starting a new narrower segment exceeds the 9-byte metadata cost of the new segment
+The `Append` method uses a single-pass greedy O(N) algorithm with no post-processing during scanning.
 
-**Split condition (narrowing)**:
+**Greedy segmentation (O(N), zero copies):**
+
+Each batch of lines is scanned left-to-right. A new segment is created for each contiguous run of same-tier values:
+1. The next line's Byte_Length requires a **wider** tier → start new segment
+2. The next line's Byte_Length could use a **narrower** tier AND `memorySaved > 9` → start new segment
+3. Otherwise → continue current run
+
+Each run produces exactly one segment via a single `byte[]` allocation from the input slice. No segment extension, no copy-and-grow, no merge pass during scanning.
+
+**Narrowing condition:**
 ```
-remainingLines = lines still to append in this batch
+remainingLines = lines still to append in this batch from current position
 currentTierSize = current segment's tier byte width
 narrowTierSize = tier needed for the new line's Byte_Length
 memorySaved = remainingLines × 2 × (currentTierSize - narrowTierSize)  // ×2 for pairs
@@ -404,6 +411,18 @@ metadataCost = 9  // new segment overhead
 
 split if memorySaved > metadataCost
 ```
+
+**No merge/split during Append** — the greedy produces near-optimal boundaries. A full `Optimize()` method (merge + split) exists for offline/test use but is never called during scanning.
+
+**Trade-offs:**
+- Uniform files produce one segment per batch (e.g., 300 segments for 300K lines at batch size 1000)
+- Extra metadata: ~2.7KB for 300 segments (negligible vs data)
+- `FindSegment` binary search: O(log 300) ≈ 9 comparisons (negligible)
+- Memory traffic: O(N) total — each byte written exactly once, zero intermediate copies
+
+**Performance characteristics:**
+- Append: O(N) time, O(N) allocations (one per segment, not per line)
+- No quadratic merge/copy loops
 
 ### Byte-Offset Navigation
 
