@@ -56,8 +56,6 @@ internal sealed class SegmentDirectory
         if (byteLengths.IsEmpty)
             return;
 
-        int segmentCountBefore = _segments.Count;
-
         // Process values in runs of same tier — one segment per run, no extending
         int i = 0;
         while (i < byteLengths.Length)
@@ -120,48 +118,6 @@ internal sealed class SegmentDirectory
             count++;
         }
         return count == 0 ? 1 : count;
-    }
-
-    /// <summary>
-    /// Optimizes only the newly added segments (from segmentStartIndex onward)
-    /// and the junction with the previous segment. Only merges — no split pass
-    /// since the greedy algorithm already creates optimal boundaries.
-    /// </summary>
-    private void OptimizeNewSegments(int segmentStartIndex)
-    {
-        // Include the segment just before the new ones (junction point)
-        int start = Math.Max(0, segmentStartIndex - 1);
-
-        // Single merge pass: merge adjacent segments when profitable
-        bool changed = true;
-        while (changed)
-        {
-            changed = false;
-            for (int s = start; s < _segments.Count - 1; s++)
-            {
-                var seg1 = _segments[s];
-                var seg2 = _segments[s + 1];
-
-                long currentMemory = SegmentMemory(seg1.Count, seg1.Tier)
-                                   + SegmentMemory(seg2.Count, seg2.Tier);
-
-                ulong max1 = GetMaxByteLength(seg1);
-                ulong max2 = GetMaxByteLength(seg2);
-                var mergedTier = SelectTier(Math.Max(max1, max2));
-
-                long mergedMemory = SegmentMemory(seg1.Count + seg2.Count, mergedTier);
-
-                if (mergedMemory < currentMemory)
-                {
-                    var mergedData = MergeSegmentData(seg1, seg2, mergedTier);
-                    var merged = new Segment(seg1.StartLine, seg1.Count + seg2.Count, mergedTier, mergedData);
-                    _segments[s] = merged;
-                    _segments.RemoveAt(s + 1);
-                    changed = true;
-                    s--;
-                }
-            }
-        }
     }
 
     /// <summary>
@@ -369,54 +325,6 @@ internal sealed class SegmentDirectory
         return IntegerTier.ULong;
     }
 
-    /// <summary>Counts consecutive lines starting at index that fit within the given tier.</summary>
-    private static int CountRunAtTier(ReadOnlySpan<ulong> byteLengths, int startIndex, IntegerTier tier)
-    {
-        int count = 0;
-        for (int j = startIndex; j < byteLengths.Length; j++)
-        {
-            if (SelectTier(byteLengths[j]) != tier)
-                break;
-            count++;
-        }
-        return count;
-    }
-
-    /// <summary>Counts consecutive lines starting at index that fit within the given tier (value fits, not exact match).</summary>
-    private static int CountRunFittingTier(ReadOnlySpan<ulong> byteLengths, int startIndex, IntegerTier tier)
-    {
-        ulong maxValue = tier switch
-        {
-            IntegerTier.Byte => 255,
-            IntegerTier.UShort => 65535,
-            IntegerTier.UInt => 4294967295,
-            IntegerTier.ULong => ulong.MaxValue,
-            _ => throw new InvalidOperationException($"Unsupported tier: {tier}")
-        };
-
-        int count = 0;
-        for (int j = startIndex; j < byteLengths.Length; j++)
-        {
-            if (byteLengths[j] > maxValue)
-                break;
-
-            // Check if narrowing is worthwhile
-            var lineTier = SelectTier(byteLengths[j]);
-            if (lineTier < tier)
-            {
-                int remainingLines = byteLengths.Length - j;
-                int currentTierSize = (int)tier;
-                int narrowTierSize = (int)lineTier;
-                int memorySaved = remainingLines * 2 * (currentTierSize - narrowTierSize);
-                if (memorySaved > 9)
-                    break;
-            }
-
-            count++;
-        }
-        return count == 0 ? 1 : count;
-    }
-
     private void CreateSegment(int startLine, ReadOnlySpan<ulong> byteLengths, IntegerTier tier)
     {
         int tierSize = (int)tier;
@@ -431,28 +339,6 @@ internal sealed class SegmentDirectory
 
         var segment = new Segment(startLine, byteLengths.Length, tier, data);
         _segments.Add(segment);
-    }
-
-    private void ExtendSegment(Segment existing, ReadOnlySpan<ulong> byteLengths)
-    {
-        int tierSize = (int)existing.Tier;
-        int existingDataLength = existing.Count * 2 * tierSize;
-        int newDataLength = (existing.Count + byteLengths.Length) * 2 * tierSize;
-
-        byte[] newData = new byte[newDataLength];
-        Array.Copy(existing.Data, newData, existingDataLength);
-
-        for (int i = 0; i < byteLengths.Length; i++)
-        {
-            int byteOffset = existingDataLength + i * 2 * tierSize;
-            WriteValue(newData, byteOffset, tierSize, byteLengths[i]);
-            // Char length slot initialized to 0 (already zero in new array)
-        }
-
-        var newSegment = new Segment(existing.StartLine, existing.Count + byteLengths.Length, existing.Tier, newData);
-
-        // Replace the last segment
-        _segments[^1] = newSegment;
     }
 
     private static void WriteValue(byte[] data, int offset, int tierSize, ulong value)

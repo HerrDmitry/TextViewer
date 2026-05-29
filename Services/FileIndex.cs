@@ -94,7 +94,7 @@ public sealed class FileIndex : IDisposable
             Index.Clear();
             _error = $"Scan failed for {_filePath}: IOException";
             _state = ScanState.Failed;
-            _logger.LogError(ex, "Scan failed for {FilePath}: IOException", _filePath);
+            _logger.LogInformation(ex, "Scan failed for {FilePath}: IOException", _filePath);
             return;
         }
         catch (OutOfMemoryException ex)
@@ -102,7 +102,7 @@ public sealed class FileIndex : IDisposable
             Index.Clear();
             _error = $"Scan failed for {_filePath}: OutOfMemoryException";
             _state = ScanState.Failed;
-            _logger.LogError(ex, "Scan failed for {FilePath}: OutOfMemoryException", _filePath);
+            _logger.LogInformation(ex, "Scan failed for {FilePath}: OutOfMemoryException", _filePath);
             return;
         }
 
@@ -128,14 +128,14 @@ public sealed class FileIndex : IDisposable
         {
             _error = $"Scan failed for {_filePath}: OutOfMemoryException";
             _state = ScanState.Failed;
-            _logger.LogError(ex, "Scan failed for {FilePath}: OutOfMemoryException", _filePath);
+            _logger.LogInformation(ex, "Scan failed for {FilePath}: OutOfMemoryException", _filePath);
             return;
         }
         catch (IOException ex)
         {
             _error = $"Scan failed for {_filePath}: IOException";
             _state = ScanState.Failed;
-            _logger.LogError(ex, "Scan failed for {FilePath}: IOException", _filePath);
+            _logger.LogInformation(ex, "Scan failed for {FilePath}: IOException", _filePath);
             return;
         }
         catch (Exception ex)
