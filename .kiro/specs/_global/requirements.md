@@ -1,16 +1,20 @@
 # Global Requirements
 
 #[[file:.kiro/specs/_global/requirements-shared.md]]
+#[[file:.kiro/specs/_global/requirements-file-index.md]]
 
 ## Introduction
 
-TextViewer is a cross-platform desktop application for viewing text content. This document captures all shipped product requirements. Infrastructure/platform context provided by requirements-shared.md.
+TextViewer is a cross-platform desktop application for viewing text content. This document captures all shipped product requirements. Infrastructure/platform context provided by requirements-shared.md. Feature-specific detailed requirements in separate docs (referenced above).
 
 ## Glossary
 
 - **Open_File_Dialog**: The native operating system file-selection dialog provided by the OS
 - **Display_Area**: The UI region in app.component.html showing current text content
 - **Hello_World_View**: The initial view displayed to the user upon application launch
+- **FileIndex**: C# class orchestrating two-phase file scanning (see `requirements-file-index.md`)
+- **Line_Index**: Per-line length metadata store within FileIndex
+- **Status_Display**: UI region beside file name showing scan metrics
 
 ## Requirements
 
@@ -73,3 +77,29 @@ TextViewer is a cross-platform desktop application for viewing text content. Thi
 
 1. WHEN the Application window is first displayed, THE Display_Area SHALL show the text "Hello World"
 2. WHILE no file name has been received from the Message_Bridge, THE Display_Area SHALL continue to display "Hello World"
+
+
+### Requirement 7: File Index — Two-Phase Scanning
+
+**User Story:** As a user, I want opened files to be scanned for line metadata, so that line count and length metrics are available progressively.
+
+#### Acceptance Criteria
+
+1. WHEN a file is selected, THE application SHALL perform Quick_Scan (byte lengths) then Full_Scan (char lengths) automatically — full spec in `requirements-file-index.md`
+2. THE FileIndex SHALL open files non-exclusively (FileShare.ReadWrite, FileAccess.Read)
+3. THE Line_Index SHALL be thread-safe (single writer, multiple concurrent readers, no torn reads)
+4. THE Line_Index SHALL use memory-compact segmented storage with tiered integer widths
+5. THE FileIndex SHALL expose ScanState and Error as thread-safe polling fields
+6. THE caller SHALL manage FileIndex lifecycle (create, poll, dispose) and update Status_Display
+
+### Requirement 8: File Index — Status Display
+
+**User Story:** As a user, I want to see scan progress and results beside the file name, so that I get immediate feedback.
+
+#### Acceptance Criteria
+
+1. WHILE scanning, THE Status_Display SHALL show a scanning indicator
+2. WHEN QuickScanComplete, THE Status_Display SHALL show line count + max Byte_Length
+3. WHEN FullScanComplete, THE Status_Display SHALL additionally show max Char_Length
+4. IF scan fails or is cancelled, THE Status_Display SHALL revert to pre-scan state
+5. IF scan fails, THE main content area SHALL display the error message

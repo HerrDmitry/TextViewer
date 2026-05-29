@@ -28,8 +28,14 @@ TextViewer/
     │   ├── _global/                    # Product-wide docs
     │   │   ├── requirements.md         # Full product reqs (all shipped features)
     │   │   ├── requirements-shared.md  # Infra/platform context (ref'd by feature specs)
+    │   │   ├── requirements-file-index.md  # File Index feature reqs (ref'd by global + feature spec)
+    │   │   ├── requirements-bus-service.md # Message Bus feature reqs
     │   │   ├── design.md              # Full product design (all shipped features)
-    │   │   └── design-shared.md       # Arch/patterns context (ref'd by feature specs)
+    │   │   ├── design-shared.md       # Arch/patterns context (ref'd by feature specs)
+    │   │   ├── design-file-index.md   # File Index feature design (ref'd by global + feature spec)
+    │   │   └── design-bus-service.md  # Message Bus feature design
+    │   ├── file-index/                 # Feature spec (refs _global/requirements-file-index.md)
+    │   ├── message-bus-service/        # Feature spec (refs *-shared.md)
     │   ├── open-file-dialog/           # Feature spec (refs *-shared.md)
     │   └── viewer-app/                 # Feature spec (refs *-shared.md)
     └── steering/
@@ -49,8 +55,10 @@ TextViewer/
 
 - **`_global/requirements-shared.md`**: Infra/platform context (tech stack, deploy model, communication model, glossary). Referenced by ALL feature specs and global docs.
 - **`_global/design-shared.md`**: Architecture layers, build pipeline, error handling patterns, design conventions. Referenced by ALL feature specs and global docs.
-- **`_global/requirements.md`**: Full product requirements (all shipped features combined). Updated when a feature ships.
-- **`_global/design.md`**: Full product design (all shipped features combined). Updated when a feature ships.
+- **`_global/requirements.md`**: Full product requirements (all shipped features combined). Updated when a feature ships. References feature-specific docs.
+- **`_global/design.md`**: Full product design (all shipped features combined). Updated when a feature ships. References feature-specific docs.
+- **`_global/requirements-{feature}.md`**: Canonical detailed requirements for a shipped feature. Referenced by both `_global/requirements.md` and the feature spec.
+- **`_global/design-{feature}.md`**: Canonical detailed design for a shipped feature. Referenced by both `_global/design.md` and the feature spec.
 
 ### New Feature Spec Template
 
@@ -68,10 +76,14 @@ Every new feature spec MUST include these refs at the top of its files:
 
 Feature specs contain ONLY feature-specific behavioral requirements and design. Do NOT duplicate infra/platform content from shared files.
 
+### Shipped Feature Merge Pattern
+
+When a feature ships, its detailed reqs/design move to `_global/requirements-{feature}.md` and `_global/design-{feature}.md`. The feature spec folder then becomes a thin wrapper referencing those canonical docs. The combined `_global/requirements.md` and `_global/design.md` include summary entries + `#[[file:...]]` refs to the feature docs.
+
 ### Lifecycle
 
 1. Create feature folder in `.kiro/specs/<feature-name>/`
 2. Add `requirements.md` with shared ref + feature-only reqs
 3. Add `design.md` with shared ref + feature-only design
 4. Add `tasks.md` with implementation tasks
-5. When feature ships → merge behavioral reqs into `_global/requirements.md`, merge design into `_global/design.md`
+5. When feature ships → extract to `_global/requirements-{feature}.md` + `_global/design-{feature}.md`, add summary + ref in combined global docs, thin-wrap feature spec
