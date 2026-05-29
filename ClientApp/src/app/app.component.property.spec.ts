@@ -1,13 +1,14 @@
 /**
- * Feature: open-file-dialog, Property 1: State guard prevents duplicate sends
+ * Feature: message-bus-service, Property: State guard prevents duplicate sends via MessageBusClient
  *
- * Validates: Requirements 1.2, 1.4
+ * Validates: Requirements 9.1, 9.3
  *
  * Property: For any sequence of Ctrl+O key presses and message responses
  * interleaved in any order, the frontend shall never have more than one
  * outstanding "open-file" message without an intervening response.
  */
 import * as fc from 'fast-check';
+import { InboundMessage, SubscriptionHandle } from './services/message-bus.types';
 
 type EventKind = 'keypress' | 'response';
 
@@ -15,21 +16,21 @@ interface SimEvent {
   kind: EventKind;
 }
 
-describe('Feature: open-file-dialog, Property 1: State guard prevents duplicate sends', () => {
-  let sendMessageMock: jest.Mock;
-  let receiveMessageCallback: ((message: string) => void) | null;
+describe('Feature: message-bus-service, Property: State guard prevents duplicate sends (MessageBusClient)', () => {
+  let sendMock: jest.Mock;
+  let subscribeHandler: ((msg: InboundMessage) => void) | null;
+  let correlationCounter: number;
 
   beforeEach(() => {
-    sendMessageMock = jest.fn();
-    receiveMessageCallback = null;
+    correlationCounter = 0;
+    sendMock = jest.fn(() => `corr-${++correlationCounter}`);
+    subscribeHandler = null;
 
-    // Mock window.external with Photino bridge interface
+    // Mock window.external for any MessageBusClient internals
     Object.defineProperty(window, 'external', {
       value: {
-        sendMessage: (message: string) => sendMessageMock(message),
-        receiveMessage: (callback: (message: string) => void) => {
-          receiveMessageCallback = callback;
-        },
+        sendMessage: jest.fn(),
+        receiveMessage: jest.fn(),
       },
       writable: true,
       configurable: true,
@@ -37,29 +38,35 @@ describe('Feature: open-file-dialog, Property 1: State guard prevents duplicate 
   });
 
   function createComponent() {
-    // Dynamically import to ensure window.external mock is in place
-    // We replicate the component logic directly to avoid Angular TestBed complexity
-    // while still testing the exact same state machine behavior
-    let awaitingResponse = false;
+    let pendingCorrelationId: string | null = null;
 
-    // Register receive callback (mirrors constructor behavior)
-    window.external.receiveMessage((message: string) => {
-      if (message !== '') {
+    const messageBus = {
+      send: sendMock,
+      subscribe: (messageType: string, handler: (msg: InboundMessage) => void): SubscriptionHandle => {
+        subscribeHandler = handler;
+        return { unsubscribe: jest.fn() };
+      },
+    };
+
+    // Mirrors constructor: subscribe to 'open-file'
+    messageBus.subscribe('open-file', (msg: InboundMessage) => {
+      if (msg.payload !== '') {
         // displayText would be set here — not relevant for this property
       }
-      awaitingResponse = false;
+      pendingCorrelationId = null;
     });
 
     return {
-      get awaitingResponse() { return awaitingResponse; },
+      get pendingCorrelationId() { return pendingCorrelationId; },
       onKeydown(event: { ctrlKey: boolean; metaKey: boolean; key: string; preventDefault: () => void }) {
         const isCtrlO = (event.ctrlKey || event.metaKey) && event.key === 'o';
         if (!isCtrlO) return;
         event.preventDefault();
-        if (!awaitingResponse) {
-          window.external.sendMessage('open-file');
-          awaitingResponse = true;
-        }
+
+        // Guard: don't send while awaiting response
+        if (pendingCorrelationId !== null) return;
+
+        pendingCorrelationId = messageBus.send('open-file');
       },
     };
   }
@@ -68,7 +75,7 @@ describe('Feature: open-file-dialog, Property 1: State guard prevents duplicate 
     return { ctrlKey: true, metaKey: false, key: 'o', preventDefault: jest.fn() };
   }
 
-  it('at most 1 outstanding sendMessage call exists at any time (no duplicate sends without intervening response)', () => {
+  it('at most 1 outstanding messageBus.send call exists at any time (no duplicate sends without intervening response)', () => {
     fc.assert(
       fc.property(
         fc.array(
@@ -80,7 +87,8 @@ describe('Feature: open-file-dialog, Property 1: State guard prevents duplicate 
         ),
         (events: SimEvent[]) => {
           // Reset mocks for each iteration
-          sendMessageMock.mockClear();
+          sendMock.mockClear();
+          correlationCounter = 0;
 
           const component = createComponent();
           let outstandingSends = 0;
@@ -88,14 +96,18 @@ describe('Feature: open-file-dialog, Property 1: State guard prevents duplicate 
 
           for (const event of events) {
             if (event.kind === 'keypress') {
-              const prevCallCount = sendMessageMock.mock.calls.length;
+              const prevCallCount = sendMock.mock.calls.length;
               component.onKeydown(makeCtrlOEvent());
-              const newCalls = sendMessageMock.mock.calls.length - prevCallCount;
+              const newCalls = sendMock.mock.calls.length - prevCallCount;
               outstandingSends += newCalls;
             } else {
               // Simulate response — only meaningful if there's an outstanding send
-              if (outstandingSends > 0 && receiveMessageCallback) {
-                receiveMessageCallback('/some/path.txt');
+              if (outstandingSends > 0 && subscribeHandler) {
+                subscribeHandler({
+                  messageType: 'open-file',
+                  correlationId: `corr-${correlationCounter}`,
+                  payload: '/some/path.txt',
+                });
                 outstandingSends--;
               }
             }

@@ -1,5 +1,6 @@
 <Solution>
   <Project Path="TextViewer.csproj" />
+  <Project Path="TextViewer.Tests/TextViewer.Tests.csproj" />
   <Folder Name="/ClientApp/">
     <File Path="ClientApp/package.json" />
     <File Path="ClientApp/angular.json" />

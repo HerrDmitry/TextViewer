@@ -1,44 +1,41 @@
-import { Component, HostListener, signal } from '@angular/core';
-
-interface PhotinoExternal {
-  sendMessage: (message: string) => void;
-  receiveMessage: (callback: (message: string) => void) => void;
-}
-
-declare global {
-  interface External extends PhotinoExternal {}
-}
+import { Component, HostListener, signal, inject, OnDestroy } from '@angular/core';
+import { MessageBusClient } from './services/message-bus-client.service';
+import { InboundMessage, SubscriptionHandle } from './services/message-bus.types';
 
 @Component({
   selector: 'app-root',
   standalone: true,
   templateUrl: './app.component.html'
 })
-export class AppComponent {
+export class AppComponent implements OnDestroy {
   displayText = signal('Hello World');
-  awaitingResponse = signal(false);
+
+  private readonly messageBus = inject(MessageBusClient);
+  private pendingCorrelationId: string | null = null;
+  private subscription: SubscriptionHandle;
 
   constructor() {
-    window.external.receiveMessage((message: string) => {
-      if (message !== '') {
-        this.displayText.set(message);
+    this.subscription = this.messageBus.subscribe('open-file', (msg: InboundMessage) => {
+      if (msg.payload !== '') {
+        this.displayText.set(msg.payload);
       }
-      this.awaitingResponse.set(false);
+      this.pendingCorrelationId = null;
     });
+  }
+
+  ngOnDestroy(): void {
+    this.subscription.unsubscribe();
   }
 
   @HostListener('document:keydown', ['$event'])
   onKeydown(event: KeyboardEvent): void {
     const isCtrlO = (event.ctrlKey || event.metaKey) && event.key === 'o';
-    if (!isCtrlO) {
-      return;
-    }
-
+    if (!isCtrlO) return;
     event.preventDefault();
 
-    if (!this.awaitingResponse()) {
-      window.external.sendMessage('open-file');
-      this.awaitingResponse.set(true);
-    }
+    // Guard: don't send while awaiting response
+    if (this.pendingCorrelationId !== null) return;
+
+    this.pendingCorrelationId = this.messageBus.send('open-file');
   }
 }
