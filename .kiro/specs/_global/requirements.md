@@ -2,6 +2,7 @@
 
 #[[file:.kiro/specs/_global/requirements-shared.md]]
 #[[file:.kiro/specs/_global/requirements-file-index.md]]
+#[[file:.kiro/specs/_global/requirements-file-view-service.md]]
 
 ## Introduction
 
@@ -15,6 +16,9 @@ TextViewer is a cross-platform desktop application for viewing text content. Thi
 - **FileIndex**: C# class orchestrating two-phase file scanning (see `requirements-file-index.md`)
 - **Line_Index**: Per-line length metadata store within FileIndex
 - **Status_Display**: UI region beside file name showing scan metrics
+- **File_View_Service**: C# backend service producing rectangular text views from an indexed file (see `requirements-file-view-service.md`)
+- **View_Request**: Request specifying start line, start column, row count, column count for viewport
+- **View_Result**: List of row strings representing the viewport
 
 ## Requirements
 
@@ -103,3 +107,16 @@ TextViewer is a cross-platform desktop application for viewing text content. Thi
 3. WHEN FullScanComplete, THE Status_Display SHALL additionally show max Char_Length
 4. IF scan fails or is cancelled, THE Status_Display SHALL revert to pre-scan state
 5. IF scan fails, THE main content area SHALL display the error message
+
+### Requirement 9: File View Service — Rectangular View Extraction
+
+**User Story:** As a caller, I want to request a rectangular region of a file by specifying viewport parameters, so that I can display file content efficiently.
+
+#### Acceptance Criteria
+
+1. THE File_View_Service SHALL produce rectangular text views given (startLine, startCol, rowCount, colCount) — full spec in `requirements-file-view-service.md`
+2. THE File_View_Service SHALL own a private FileIndex, manage its lifecycle, and expose ScanState for observation
+3. THE File_View_Service SHALL decode bytes using FileIndex-detected encoding (UTF-8/16/32, BOM-aware)
+4. THE File_View_Service SHALL support ≥ 4 concurrent requests via independent file handles (FileAccess.Read, FileShare.ReadWrite)
+5. THE File_View_Service SHALL use Result pattern for errors; OperationCanceledException for cancellation
+6. Column = .NET char (UTF-16 code unit); delimiters appended but not counted toward Column_Count

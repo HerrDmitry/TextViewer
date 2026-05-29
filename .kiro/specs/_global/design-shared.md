@@ -63,6 +63,8 @@ graph LR
 | `ClientApp/src/app/app.component.html` | Angular root template |
 | `ClientApp/src/app/services/message-bus-client.service.ts` | Message_Bus_Client singleton |
 | `Services/MessageBusHost.cs` | Message_Bus_Host (.NET) |
+| `Services/FileIndex.cs` | FileIndex — two-phase file scanner |
+| `Services/FileViewService.cs` | FileViewService — rectangular view extraction |
 | `Services/MessageProtocol.cs` | Wire protocol encode/decode/validate (C#) |
 | `Services/IMessageBridge.cs` | Bridge abstraction for testability |
 | `Services/PhotinoMessageBridge.cs` | Photino adapter implementing IMessageBridge |

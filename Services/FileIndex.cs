@@ -34,6 +34,12 @@ public sealed class FileIndex : IDisposable
     /// <summary>Thread-safe line index (readable after QuickScanComplete).</summary>
     public LineIndex Index { get; }
 
+    /// <summary>Detected file encoding (set during scan, defaults to UTF-8 when no BOM present).</summary>
+    public Encoding Encoding { get; private set; } = Encoding.UTF8;
+
+    /// <summary>Number of BOM bytes at the start of the file (0 if no BOM).</summary>
+    public int BomByteLength { get; private set; } = 0;
+
     /// <summary>
     /// Starts the two-phase scan. Quick_Scan runs first, then Full_Scan automatically.
     /// Returns when both phases complete, fail, or are cancelled.
@@ -398,6 +404,7 @@ public sealed class FileIndex : IDisposable
     /// <summary>
     /// Detects the file encoding by reading the BOM from the stream.
     /// Returns the detected encoding and the BOM byte length (0 if no BOM found).
+    /// Sets the public Encoding and BomByteLength properties before returning.
     /// Does NOT reset stream position — caller must seek after calling.
     /// </summary>
     private async Task<(Encoding encoding, int bomByteLength)> DetectEncodingAsync()
@@ -406,17 +413,45 @@ public sealed class FileIndex : IDisposable
         byte[] bom = new byte[4];
         int read = await _stream!.ReadAsync(bom.AsMemory(0, 4), _cancellationToken);
 
+        if (read >= 4 && bom[0] == 0xFF && bom[1] == 0xFE && bom[2] == 0x00 && bom[3] == 0x00)
+        {
+            Encoding = Encoding.UTF32; // UTF-32 LE
+            BomByteLength = 4;
+            return (Encoding, BomByteLength);
+        }
+
+        if (read >= 4 && bom[0] == 0x00 && bom[1] == 0x00 && bom[2] == 0xFE && bom[3] == 0xFF)
+        {
+            Encoding = new UTF32Encoding(bigEndian: true, byteOrderMark: true); // UTF-32 BE
+            BomByteLength = 4;
+            return (Encoding, BomByteLength);
+        }
+
         if (read >= 3 && bom[0] == 0xEF && bom[1] == 0xBB && bom[2] == 0xBF)
-            return (Encoding.UTF8, 3); // UTF-8 BOM: 3 bytes
+        {
+            Encoding = Encoding.UTF8; // UTF-8 BOM
+            BomByteLength = 3;
+            return (Encoding, BomByteLength);
+        }
 
         if (read >= 2 && bom[0] == 0xFF && bom[1] == 0xFE)
-            return (Encoding.Unicode, 2); // UTF-16 LE BOM: 2 bytes
+        {
+            Encoding = Encoding.Unicode; // UTF-16 LE BOM
+            BomByteLength = 2;
+            return (Encoding, BomByteLength);
+        }
 
         if (read >= 2 && bom[0] == 0xFE && bom[1] == 0xFF)
-            return (Encoding.BigEndianUnicode, 2); // UTF-16 BE BOM: 2 bytes
+        {
+            Encoding = Encoding.BigEndianUnicode; // UTF-16 BE BOM
+            BomByteLength = 2;
+            return (Encoding, BomByteLength);
+        }
 
         // No BOM detected — default to UTF-8, no BOM bytes to skip
-        return (Encoding.UTF8, 0);
+        Encoding = Encoding.UTF8;
+        BomByteLength = 0;
+        return (Encoding, BomByteLength);
     }
 
     /// <summary>

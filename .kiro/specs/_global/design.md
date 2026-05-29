@@ -2,10 +2,11 @@
 
 #[[file:.kiro/specs/_global/design-shared.md]]
 #[[file:.kiro/specs/_global/design-file-index.md]]
+#[[file:.kiro/specs/_global/design-file-view-service.md]]
 
 ## Overview
 
-This document captures the full product design for all shipped features. Architecture, build pipeline, communication model, and error handling patterns are provided by design-shared.md. File Index internals in `design-file-index.md`. This document covers feature-specific component interfaces, state, correctness properties, and testing.
+This document captures the full product design for all shipped features. Architecture, build pipeline, communication model, and error handling patterns are provided by design-shared.md. File Index internals in `design-file-index.md`. File View Service in `design-file-view-service.md`. This document covers feature-specific component interfaces, state, correctness properties, and testing.
 
 ## Architecture
 
@@ -18,11 +19,12 @@ graph TD
     E --> F[Angular App]
     A --> G[MessageBusHost]
     G --> H[open-file handler]
-    H --> I[FileIndex]
-    I --> J[LineIndex / SegmentDirectory]
+    H --> I[FileViewService]
+    I --> J[FileIndex]
+    J --> K[LineIndex / SegmentDirectory]
 
     subgraph ".NET 10"
-        A; B; C; G; H; I; J
+        A; B; C; G; H; I; J; K
     end
     subgraph "Native Window"
         D; E
@@ -32,7 +34,7 @@ graph TD
     end
 ```
 
-See `design-shared.md` for layer details. See `design-file-index.md` for FileIndex internals.
+See `design-shared.md` for layer details. See `design-file-index.md` for FileIndex internals. See `design-file-view-service.md` for view extraction.
 
 ## Components and Interfaces
 
@@ -149,7 +151,19 @@ FileIndex is created by the caller after receiving a file path from the open-fil
 Key integration points:
 - Caller creates `FileIndex(path, ct, logger)` → calls `StartScanAsync()`
 - Polls `State` to update Status_Display
+- Exposes `Encoding` (System.Text.Encoding) + `BomByteLength` (int) for consumers
 - Disposes on new file selection or app shutdown
+
+### FileViewService Integration
+
+FileViewService wraps FileIndex to produce rectangular text views. Full design in `design-file-view-service.md`.
+
+Key integration points:
+- Owns private FileIndex (lifecycle managed internally)
+- `GetViewAsync(startLine, startCol, rowCount, colCount, ct)` → `Result<ViewResult, ViewError>`
+- Independent file handle per request → ≥4 concurrent reads
+- Partial decode: O(startCol + colCount) not O(lineLength)
+- Uses FileIndex `Encoding` + `BomByteLength` for character decoding
 
 ### Frontend State
 
@@ -186,6 +200,7 @@ All frontend↔backend communication uses the Message Bus envelope format. See `
 | Build-time failures | MSBuild target fails → blocks build |
 | Message Bus errors | See `design-bus-service.md` |
 | FileIndex errors | See `design-file-index.md` error handling table |
+| FileViewService errors | See `design-file-view-service.md` error handling table |
 | File access denied / not found | FileIndex → Failed state + Error property; caller displays |
 
 ## Correctness Properties

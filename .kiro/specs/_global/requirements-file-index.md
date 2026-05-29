@@ -103,7 +103,17 @@ File Index feature. When a user selects a file via the Open File Dialog, the app
 6. THE ScanState and Error properties SHALL be safe to read from any thread at any time without synchronization by the caller
 7. THE Line_Index data SHALL be readable by any thread once ScanState reaches QuickScanComplete or later
 
-### Requirement 8: Caller Responsibilities (UI Integration)
+### Requirement 8: Encoding Exposure
+
+**User Story:** As a consumer (e.g. File_View_Service), I need to obtain the detected file encoding from FileIndex, so that line bytes can be correctly decoded into characters.
+
+#### Acceptance Criteria
+
+1. THE FileIndex SHALL expose a public property `Encoding` of type `System.Text.Encoding` returning the encoding detected during scan (UTF-8, UTF-16 LE, UTF-16 BE, UTF-32 LE, UTF-32 BE; defaults to UTF-8 when no BOM present)
+2. THE FileIndex SHALL expose a public property `BomByteLength` of type `int` returning the number of BOM bytes at file start (0 if no BOM, 3 for UTF-8, 2 for UTF-16, 4 for UTF-32)
+3. THE `Encoding` and `BomByteLength` properties SHALL be available immediately after scan starts (encoding detection is first operation before line indexing); they SHALL never be null once scan has started
+
+### Requirement 9: Caller Responsibilities (UI Integration)
 
 **User Story:** As a user, I want to see scan results as they become available and error messages when scans fail, so that I get immediate feedback about the file.
 

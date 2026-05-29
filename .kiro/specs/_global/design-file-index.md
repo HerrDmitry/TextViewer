@@ -15,6 +15,7 @@ Key behaviors:
 - 4 unsigned integer tiers (byte/ushort/uint/ulong)
 - Memory-optimal segment boundaries (split only when savings exceed metadata cost)
 - Byte_Length includes line-ending delimiter bytes → enables byte-offset navigation via prefix sum
+- Encoding detection via BOM (UTF-8/16/32); `Encoding` + `BomByteLength` exposed immediately after scan starts
 - CancellationToken + ILogger<FileIndex> injection, IDisposable lifecycle
 - ScanState enum for polling-based progress observation
 
@@ -124,6 +125,8 @@ public sealed class FileIndex : IDisposable
     public ScanState State => _state;
     public string? Error => _error;
     public LineIndex Index { get; }
+    public Encoding Encoding { get; private set; } = Encoding.UTF8;
+    public int BomByteLength { get; private set; } = 0;
 
     public Task StartScanAsync();
     public void Dispose();
@@ -322,6 +325,8 @@ Invariant: GetByteOffset(LineCount) == fileSize
 | GetByteOffset | Reads only committed segments | Consistent sum |
 | AppendByteLengths | `_writeLock`; publishes segment then increments `_lineCount` | Complete pairs only |
 | SetCharLength | `Interlocked.Exchange` on char slot | Atomic write |
+| Encoding | Set once before scan publishes lines | Immutable after init |
+| BomByteLength | Set once before scan publishes lines | Immutable after init |
 
 **Visibility ordering**: `_lineCount` incremented AFTER segment data fully written. Char-length uses `_charLengthsWrittenUpTo` counter — returns null (not yet processed) or final value.
 
