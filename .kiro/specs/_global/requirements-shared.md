@@ -40,6 +40,19 @@
 - Native OS dialogs for file system interactions
 - Platform-native webview rendering (no Electron/Chromium bundling)
 
+## Result Pattern Requirement
+
+All .NET service methods and protocol operations that can produce expected failures SHALL return `Result<T, E>` rather than using nullable returns, exception-based control flow, or mutable state polling. This applies to:
+
+1. **Protocol parsing** — decode/validate operations return `Result<ParsedType, ParseError>` instead of nullable
+2. **Async operations with known failure modes** — return `Task<Result<Summary, Error>>` so callers get explicit terminal outcome without polling state fields
+3. **Dispatch/routing pipelines** — return `Result<Outcome, Error>` to centralize validation and error response logic
+4. **Service methods with domain errors** — return `Result<SuccessType, DomainError>` (already established in `FileViewService.GetViewAsync`)
+
+Exceptions remain appropriate ONLY for unrecoverable infrastructure failures (DI resolution, webview init, programmer errors).
+
+See `design-shared.md` → "Result Type Pattern" for implementation conventions.
+
 ## Glossary (Shared Terms)
 
 - **Application**: The TextViewer desktop application

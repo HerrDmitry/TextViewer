@@ -82,7 +82,7 @@ public class MessageBusHostTests : IDisposable
 
         Assert.Single(_bridge.SentMessages);
         var decoded = MessageProtocol.Decode(_bridge.SentMessages[0]);
-        Assert.NotNull(decoded);
+        Assert.True(decoded.IsSuccess);
         Assert.Equal("echo", decoded.Value.MessageType);
         Assert.Equal("my-corr-id", decoded.Value.CorrelationId);
         Assert.Equal("echoed", decoded.Value.Payload);
@@ -99,7 +99,7 @@ public class MessageBusHostTests : IDisposable
 
         Assert.Single(_bridge.SentMessages);
         var decoded = MessageProtocol.Decode(_bridge.SentMessages[0]);
-        Assert.NotNull(decoded);
+        Assert.True(decoded.IsSuccess);
         Assert.Equal("notify-client", decoded.Value.MessageType);
         Assert.Equal("some-data", decoded.Value.Payload);
         // Correlation_ID should be a valid GUID format
@@ -125,7 +125,7 @@ public class MessageBusHostTests : IDisposable
 
         Assert.Single(_bridge.SentMessages);
         var decoded = MessageProtocol.Decode(_bridge.SentMessages[0]);
-        Assert.NotNull(decoded);
+        Assert.True(decoded.IsSuccess);
         Assert.Equal("system:error", decoded.Value.MessageType);
         Assert.Equal("err-corr-1", decoded.Value.CorrelationId);
         Assert.Contains("Something went wrong", decoded.Value.Payload);
@@ -155,7 +155,7 @@ public class MessageBusHostTests : IDisposable
 
         Assert.Single(_bridge.SentMessages);
         var decoded = MessageProtocol.Decode(_bridge.SentMessages[0]);
-        Assert.NotNull(decoded);
+        Assert.True(decoded.IsSuccess);
         Assert.Equal("system:alert", decoded.Value.MessageType);
         Assert.Equal("warning-data", decoded.Value.Payload);
         Assert.True(Guid.TryParse(decoded.Value.CorrelationId, out _));
@@ -229,7 +229,7 @@ public class MessageBusHostTests : IDisposable
 
         Assert.Single(_bridge.SentMessages);
         var decoded = MessageProtocol.Decode(_bridge.SentMessages[0]);
-        Assert.NotNull(decoded);
+        Assert.True(decoded.IsSuccess);
         Assert.Equal("ack-op", decoded.Value.MessageType);
         Assert.Equal("corr-abc", decoded.Value.CorrelationId);
         Assert.Equal("", decoded.Value.Payload);

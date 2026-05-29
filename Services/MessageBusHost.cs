@@ -2,6 +2,29 @@ using System.Threading.Channels;
 
 namespace TextViewer.Services;
 
+/// <summary>Outcome of a successfully dispatched message.</summary>
+public enum DispatchOutcome
+{
+    /// <summary>Handler returned a response that was sent back.</summary>
+    ResponseSent,
+    /// <summary>Handler returned null — fire-and-forget, no wire message.</summary>
+    FireAndForget
+}
+
+/// <summary>Reason message dispatch failed.</summary>
+public enum DispatchErrorCode
+{
+    ParseFailure,
+    InvalidMessageType,
+    InvalidCorrelationId,
+    PayloadTooLarge,
+    NoHandler,
+    HandlerException
+}
+
+/// <summary>Structured dispatch failure info.</summary>
+public sealed record DispatchError(DispatchErrorCode Code, string Message);
+
 /// <summary>
 /// Backend message bus host. Receives messages from the bridge,
 /// routes to registered handlers, sends responses back. Sequential processing
@@ -133,39 +156,48 @@ public sealed class MessageBusHost : IDisposable
 
     private async Task ProcessMessageAsync(string rawMessage)
     {
-        var decoded = MessageProtocol.Decode(rawMessage);
-        if (decoded is null)
+        var result = await DispatchMessageAsync(rawMessage);
+        if (!result.IsSuccess)
         {
-            Console.Error.WriteLine("[MessageBusHost] Warning: Failed to parse message envelope, discarding.");
-            return;
+            Console.Error.WriteLine($"[MessageBusHost] Warning: {result.Error.Message}");
+        }
+    }
+
+    internal async Task<Result<DispatchOutcome, DispatchError>> DispatchMessageAsync(string rawMessage)
+    {
+        var decodeResult = MessageProtocol.Decode(rawMessage);
+        if (!decodeResult.IsSuccess)
+        {
+            return Result<DispatchOutcome, DispatchError>.Failure(
+                new DispatchError(DispatchErrorCode.ParseFailure, "Failed to parse message envelope, discarding."));
         }
 
-        var (messageType, correlationId, payload) = decoded.Value;
+        var (messageType, correlationId, payload) = decodeResult.Value;
 
         // Validate fields
         if (!MessageProtocol.ValidateMessageType(messageType))
         {
-            Console.Error.WriteLine($"[MessageBusHost] Warning: Invalid message type '{messageType}', discarding.");
-            return;
+            return Result<DispatchOutcome, DispatchError>.Failure(
+                new DispatchError(DispatchErrorCode.InvalidMessageType, $"Invalid message type '{messageType}', discarding."));
         }
 
         if (!MessageProtocol.ValidateCorrelationId(correlationId))
         {
-            Console.Error.WriteLine($"[MessageBusHost] Warning: Invalid correlation ID '{correlationId}', discarding.");
-            return;
+            return Result<DispatchOutcome, DispatchError>.Failure(
+                new DispatchError(DispatchErrorCode.InvalidCorrelationId, $"Invalid correlation ID '{correlationId}', discarding."));
         }
 
         if (!MessageProtocol.ValidatePayload(payload))
         {
-            Console.Error.WriteLine("[MessageBusHost] Warning: Payload exceeds max length, discarding.");
-            return;
+            return Result<DispatchOutcome, DispatchError>.Failure(
+                new DispatchError(DispatchErrorCode.PayloadTooLarge, "Payload exceeds max length, discarding."));
         }
 
         // Find registered handler
         if (!_handlers.TryGetValue(messageType, out var handler))
         {
-            Console.Error.WriteLine($"[MessageBusHost] Warning: No handler registered for message type '{messageType}', discarding.");
-            return;
+            return Result<DispatchOutcome, DispatchError>.Failure(
+                new DispatchError(DispatchErrorCode.NoHandler, $"No handler registered for message type '{messageType}', discarding."));
         }
 
         // Invoke handler
@@ -176,20 +208,20 @@ public sealed class MessageBusHost : IDisposable
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[MessageBusHost] Error: Handler for '{messageType}' threw: {ex.Message}");
-
             // Send system:error with the correlationId and error description
             var errorEnvelope = MessageProtocol.Encode("system:error", correlationId, ex.Message);
             _bridge.SendWebMessage(errorEnvelope);
-            return;
+            return Result<DispatchOutcome, DispatchError>.Failure(
+                new DispatchError(DispatchErrorCode.HandlerException, $"Handler for '{messageType}' threw: {ex.Message}"));
         }
 
         // Null response = fire-and-forget, no wire message sent
         if (responsePayload is null)
-            return;
+            return Result<DispatchOutcome, DispatchError>.Success(DispatchOutcome.FireAndForget);
 
         // Non-null (including empty string) = encode + send response
         var responseEnvelope = MessageProtocol.Encode(messageType, correlationId, responsePayload);
         _bridge.SendWebMessage(responseEnvelope);
+        return Result<DispatchOutcome, DispatchError>.Success(DispatchOutcome.ResponseSent);
     }
 }
