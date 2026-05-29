@@ -1,10 +1,38 @@
 # Global Design
 
 #[[file:.kiro/specs/_global/design-shared.md]]
+#[[file:.kiro/specs/_global/design-file-index.md]]
 
 ## Overview
 
-This document captures the full product design for all shipped features. Architecture, build pipeline, communication model, and error handling patterns are provided by design-shared.md. This document covers feature-specific component interfaces, state, correctness properties, and testing.
+This document captures the full product design for all shipped features. Architecture, build pipeline, communication model, and error handling patterns are provided by design-shared.md. File Index internals in `design-file-index.md`. This document covers feature-specific component interfaces, state, correctness properties, and testing.
+
+## Architecture
+
+```mermaid
+graph TD
+    A[Program.cs] --> B[PhotinoBlazorAppBuilder]
+    B --> C[Blazor Host]
+    C --> D[Photino Window]
+    D --> E[WebView]
+    E --> F[Angular App]
+    A --> G[MessageBusHost]
+    G --> H[open-file handler]
+    H --> I[FileIndex]
+    I --> J[LineIndex / SegmentDirectory]
+
+    subgraph ".NET 10"
+        A; B; C; G; H; I; J
+    end
+    subgraph "Native Window"
+        D; E
+    end
+    subgraph "Web Content"
+        F
+    end
+```
+
+See `design-shared.md` for layer details. See `design-file-index.md` for FileIndex internals.
 
 ## Components and Interfaces
 
@@ -114,6 +142,15 @@ export class AppComponent implements OnDestroy {
 
 ## Data Models
 
+### FileIndex Integration
+
+FileIndex is created by the caller after receiving a file path from the open-file handler. Full class diagram, interfaces, data models, thread-safety model, and testing strategy in `design-file-index.md`.
+
+Key integration points:
+- Caller creates `FileIndex(path, ct, logger)` → calls `StartScanAsync()`
+- Polls `State` to update Status_Display
+- Disposes on new file selection or app shutdown
+
 ### Frontend State
 
 ```typescript
@@ -139,6 +176,17 @@ All frontend↔backend communication uses the Message Bus envelope format. See `
 |-----------|--------|---------|
 | JS → .NET | Envelope: `type\ncorrelationId\npayload` | `"open-file\nabc-123\n"` |
 | .NET → JS | Envelope: `type\ncorrelationId\npayload` | `"open-file\nabc-123\nC:\Users\me\report.pdf"` |
+
+## Error Handling
+
+| Category | Strategy |
+|----------|----------|
+| Missing embedded assets | Provider returns not-found → blank page; build validation prevents |
+| WebView unavailable | Photino throws `PlatformNotSupportedException` → app exits |
+| Build-time failures | MSBuild target fails → blocks build |
+| Message Bus errors | See `design-bus-service.md` |
+| FileIndex errors | See `design-file-index.md` error handling table |
+| File access denied / not found | FileIndex → Failed state + Error property; caller displays |
 
 ## Correctness Properties
 
