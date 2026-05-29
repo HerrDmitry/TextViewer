@@ -44,7 +44,7 @@ public sealed class FileIndex : IDisposable
     /// Starts the two-phase scan. Quick_Scan runs first, then Full_Scan automatically.
     /// Returns when both phases complete, fail, or are cancelled.
     /// </summary>
-    public async Task StartScanAsync()
+    public async Task<Result<ScanSummary, ScanError>> StartScanAsync()
     {
         _logger.LogInformation("Starting scan for {FilePath}", _filePath);
 
@@ -62,21 +62,24 @@ public sealed class FileIndex : IDisposable
             _error = $"Failed to open {_filePath}: FileNotFoundException";
             _state = ScanState.Failed;
             _logger.LogError(ex, "Failed to open {FilePath}: FileNotFoundException", _filePath);
-            return;
+            return Result<ScanSummary, ScanError>.Failure(
+                new ScanError(ScanErrorCode.FileNotFound, _error));
         }
         catch (UnauthorizedAccessException ex)
         {
             _error = $"Failed to open {_filePath}: UnauthorizedAccessException";
             _state = ScanState.Failed;
             _logger.LogError(ex, "Failed to open {FilePath}: UnauthorizedAccessException", _filePath);
-            return;
+            return Result<ScanSummary, ScanError>.Failure(
+                new ScanError(ScanErrorCode.AccessDenied, _error));
         }
         catch (IOException ex)
         {
             _error = $"Failed to open {_filePath}: IOException";
             _state = ScanState.Failed;
             _logger.LogError(ex, "Failed to open {FilePath}: IOException", _filePath);
-            return;
+            return Result<ScanSummary, ScanError>.Failure(
+                new ScanError(ScanErrorCode.IoError, _error));
         }
 
         // File opened successfully — transition to QuickScanInProgress
@@ -93,7 +96,8 @@ public sealed class FileIndex : IDisposable
             Index.Clear();
             _state = ScanState.Cancelled;
             _logger.LogInformation("Quick_Scan cancelled for {FilePath}", _filePath);
-            return;
+            return Result<ScanSummary, ScanError>.Failure(
+                new ScanError(ScanErrorCode.Cancelled, $"Quick_Scan cancelled for {_filePath}"));
         }
         catch (IOException ex)
         {
@@ -101,7 +105,8 @@ public sealed class FileIndex : IDisposable
             _error = $"Scan failed for {_filePath}: IOException";
             _state = ScanState.Failed;
             _logger.LogInformation(ex, "Scan failed for {FilePath}: IOException", _filePath);
-            return;
+            return Result<ScanSummary, ScanError>.Failure(
+                new ScanError(ScanErrorCode.IoError, _error));
         }
         catch (OutOfMemoryException ex)
         {
@@ -109,7 +114,8 @@ public sealed class FileIndex : IDisposable
             _error = $"Scan failed for {_filePath}: OutOfMemoryException";
             _state = ScanState.Failed;
             _logger.LogInformation(ex, "Scan failed for {FilePath}: OutOfMemoryException", _filePath);
-            return;
+            return Result<ScanSummary, ScanError>.Failure(
+                new ScanError(ScanErrorCode.OutOfMemory, _error));
         }
 
         _state = ScanState.QuickScanComplete;
@@ -128,33 +134,40 @@ public sealed class FileIndex : IDisposable
             // Quick_Scan data preserved — do NOT clear LineIndex
             _state = ScanState.Cancelled;
             _logger.LogInformation("Full_Scan cancelled for {FilePath}", _filePath);
-            return;
+            return Result<ScanSummary, ScanError>.Failure(
+                new ScanError(ScanErrorCode.Cancelled, $"Full_Scan cancelled for {_filePath}"));
         }
         catch (OutOfMemoryException ex)
         {
             _error = $"Scan failed for {_filePath}: OutOfMemoryException";
             _state = ScanState.Failed;
             _logger.LogInformation(ex, "Scan failed for {FilePath}: OutOfMemoryException", _filePath);
-            return;
+            return Result<ScanSummary, ScanError>.Failure(
+                new ScanError(ScanErrorCode.OutOfMemory, _error));
         }
         catch (IOException ex)
         {
             _error = $"Scan failed for {_filePath}: IOException";
             _state = ScanState.Failed;
             _logger.LogInformation(ex, "Scan failed for {FilePath}: IOException", _filePath);
-            return;
+            return Result<ScanSummary, ScanError>.Failure(
+                new ScanError(ScanErrorCode.IoError, _error));
         }
         catch (Exception ex)
         {
             _error = $"Scan failed for {_filePath}: {ex.GetType().Name}";
             _state = ScanState.Failed;
             _logger.LogInformation(ex, "Scan failed for {FilePath}: {ExceptionType}", _filePath, ex.GetType().Name);
-            return;
+            return Result<ScanSummary, ScanError>.Failure(
+                new ScanError(ScanErrorCode.Unknown, _error));
         }
 
         Index.FinalizeCharLengths();
         _state = ScanState.FullScanComplete;
         _logger.LogInformation("Full_Scan complete for {FilePath}", _filePath);
+
+        return Result<ScanSummary, ScanError>.Success(
+            new ScanSummary(Index.LineCount, Encoding, BomByteLength));
     }
 
     private async Task RunQuickScanAsync()

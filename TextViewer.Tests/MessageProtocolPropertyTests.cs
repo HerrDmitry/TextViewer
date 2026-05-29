@@ -68,12 +68,12 @@ public class MessageProtocolPropertyTests
                 var encoded = MessageProtocol.Encode(messageType, correlationId, payload);
                 var decoded = MessageProtocol.Decode(encoded);
 
-                return (decoded != null &&
+                return (decoded.IsSuccess &&
                         decoded.Value.MessageType == messageType &&
                         decoded.Value.CorrelationId == correlationId &&
                         decoded.Value.Payload == payload)
                     .Label($"Expected ({messageType}, {correlationId}, {payload?.Length ?? 0} chars) " +
-                           $"but got {(decoded == null ? "null" : $"({decoded.Value.MessageType}, {decoded.Value.CorrelationId}, {decoded.Value.Payload.Length} chars)")}");
+                           $"but got {(!decoded.IsSuccess ? "error" : $"({decoded.Value.MessageType}, {decoded.Value.CorrelationId}, {decoded.Value.Payload.Length} chars)")}");
             });
     }
 }

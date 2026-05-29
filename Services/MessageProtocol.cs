@@ -2,6 +2,18 @@ using System.Text.RegularExpressions;
 
 namespace TextViewer.Services;
 
+/// <summary>Decoded wire envelope.</summary>
+public readonly record struct MessageEnvelope(string MessageType, string CorrelationId, string Payload);
+
+/// <summary>Reason a Decode operation failed.</summary>
+public enum DecodeError
+{
+    /// <summary>Input was null.</summary>
+    NullInput,
+    /// <summary>Fewer than two newline characters in the raw string.</summary>
+    MalformedEnvelope
+}
+
 /// <summary>
 /// Shared message protocol for encoding/decoding wire envelopes.
 /// Wire format: Message_Type\nCorrelation_ID\npayload
@@ -29,27 +41,28 @@ public static partial class MessageProtocol
 
     /// <summary>
     /// Decodes a raw wire envelope into its constituent parts.
-    /// Returns null if the raw string does not contain at least two newline characters.
+    /// Returns a Result with DecodeError if the raw string is null or does not contain
+    /// at least two newline characters.
     /// Splits on first two \n occurrences only — payload may contain additional newlines.
     /// </summary>
-    public static (string MessageType, string CorrelationId, string Payload)? Decode(string raw)
+    public static Result<MessageEnvelope, DecodeError> Decode(string raw)
     {
         if (raw is null)
-            return null;
+            return Result<MessageEnvelope, DecodeError>.Failure(DecodeError.NullInput);
 
         var firstNewline = raw.IndexOf('\n');
         if (firstNewline < 0)
-            return null;
+            return Result<MessageEnvelope, DecodeError>.Failure(DecodeError.MalformedEnvelope);
 
         var secondNewline = raw.IndexOf('\n', firstNewline + 1);
         if (secondNewline < 0)
-            return null;
+            return Result<MessageEnvelope, DecodeError>.Failure(DecodeError.MalformedEnvelope);
 
         var messageType = raw[..firstNewline];
         var correlationId = raw[(firstNewline + 1)..secondNewline];
         var payload = raw[(secondNewline + 1)..];
 
-        return (messageType, correlationId, payload);
+        return Result<MessageEnvelope, DecodeError>.Success(new MessageEnvelope(messageType, correlationId, payload));
     }
 
     /// <summary>
