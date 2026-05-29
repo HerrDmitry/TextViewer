@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using Photino.Blazor;
+using TextViewer.Services;
 
 namespace TextViewer;
 
@@ -25,28 +26,25 @@ public class Program
             .SetUseOsDefaultSize(true)
             .SetResizable(true);
 
-        app.MainWindow.RegisterWebMessageReceivedHandler((object? sender, string message) =>
+        // Set up Message Bus
+        var bridge = new PhotinoMessageBridge(app.MainWindow);
+        var messageBus = new MessageBusHost(bridge);
+
+        messageBus.RegisterHandler("open-file", async (correlationId, payload) =>
         {
-            if (message == "open-file")
+            try
             {
-                try
+                var files = app.MainWindow.ShowOpenFile("Open File", "", false, null);
+                if (files != null && files.Length > 0 && !string.IsNullOrEmpty(files[0]))
                 {
-                    var files = app.MainWindow.ShowOpenFile("Open File", "", false, null);
-                    if (files != null && files.Length > 0 && !string.IsNullOrEmpty(files[0]))
-                    {
-                        app.MainWindow.SendWebMessage(files[0]);
-                    }
-                    else
-                    {
-                        app.MainWindow.SendWebMessage("");
-                    }
+                    return files[0];
                 }
-                catch
-                {
-                    app.MainWindow.SendWebMessage("");
-                }
+                return "";
             }
-            // Any other message is silently ignored
+            catch
+            {
+                return "";
+            }
         });
 
         AppDomain.CurrentDomain.UnhandledException += (sender, error) =>

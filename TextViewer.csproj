@@ -28,6 +28,11 @@
     <EmbeddedResource Include="wwwroot\**" />
     <Content Remove="ClientApp\**" />
     <None Remove="ClientApp\**" />
+    <!-- Exclude test project from main compilation -->
+    <Compile Remove="TextViewer.Tests\**" />
+    <Content Remove="TextViewer.Tests\**" />
+    <None Remove="TextViewer.Tests\**" />
+    <EmbeddedResource Remove="TextViewer.Tests\**" />
   </ItemGroup>
 
   <!-- Build Angular app before C# build -->

@@ -10,35 +10,35 @@ This document captures the full product design for all shipped features. Archite
 
 ### 1. .NET Host Application (`Program.cs`)
 
-Entry point — configures and launches Photino.Blazor app.
+Entry point — configures and launches Photino.Blazor app, sets up Message Bus.
 
 **Responsibilities:**
 - Create and configure `PhotinoBlazorAppBuilder`
 - Register Blazor root component
 - Configure Photino window properties (title, size, resizability)
-- Register `WebMessageReceived` handler for message routing
+- Instantiate `PhotinoMessageBridge` + `MessageBusHost`
+- Register message handlers (e.g. "open-file") on the bus
 - Start application event loop
 
 **Interface:**
 ```csharp
-var appBuilder = PhotinoBlazorAppBuilder.CreateDefault(args);
-appBuilder.RootComponents.Add<App>("app");
-
-var app = appBuilder.Build();
+var app = builder.Build();
 
 app.MainWindow
     .SetTitle("Text Viewer")
     .SetUseOsDefaultSize(true)
     .SetResizable(true);
 
-// Message routing
-app.MainWindow.RegisterWebMessageReceivedHandler((sender, message) =>
+// Message Bus setup
+var bridge = new PhotinoMessageBridge(app.MainWindow);
+var messageBus = new MessageBusHost(bridge);
+
+messageBus.RegisterHandler("open-file", async (correlationId, payload) =>
 {
-    if (message == "open-file")
-    {
-        // Show native file dialog
-        // SendWebMessage(path) or SendWebMessage("")
-    }
+    var files = app.MainWindow.ShowOpenFile("Open File", "", false, null);
+    if (files != null && files.Length > 0 && !string.IsNullOrEmpty(files[0]))
+        return files[0];
+    return "";
 });
 
 app.Run();
@@ -70,21 +70,25 @@ Minimal Blazor component — mounting point for Angular app.
 
 ```typescript
 @Component({ standalone: true, selector: 'app-root' })
-export class AppComponent {
+export class AppComponent implements OnDestroy {
   displayText = signal('Hello World');
-  private awaitingResponse = signal(false);
+
+  private readonly messageBus = inject(MessageBusClient);
+  private pendingCorrelationId: string | null = null;
+  private subscription: SubscriptionHandle;
+
+  constructor() { /* subscribe to 'open-file' responses */ }
+  ngOnDestroy(): void { /* unsubscribe */ }
 
   @HostListener('document:keydown', ['$event'])
   onKeydown(event: KeyboardEvent): void;
-
-  private onMessageReceived(message: string): void;
 }
 ```
 
 | Method | Trigger | Effect |
 |--------|---------|--------|
-| `onKeydown` | `document:keydown` | If Ctrl+O/Cmd+O and not awaiting → `preventDefault`, send `"open-file"`, set awaiting |
-| `onMessageReceived` | Photino bridge message | If non-empty → set `displayText`; clear awaiting |
+| `onKeydown` | `document:keydown` | If Ctrl+O/Cmd+O and `pendingCorrelationId === null` → `preventDefault`, `messageBus.send('open-file')`, store correlationId |
+| subscription handler | Message_Bus inbound | If non-empty payload → set `displayText`; clear `pendingCorrelationId` |
 
 ### 4. Project File (`TextViewer.csproj`)
 
@@ -114,8 +118,8 @@ export class AppComponent {
 
 ```typescript
 interface AppState {
-  displayText: string;       // Current text in Display_Area ("Hello World" initially)
-  awaitingResponse: boolean; // Guards against duplicate dialog requests
+  displayText: string;              // Current text in Display_Area ("Hello World" initially)
+  pendingCorrelationId: string | null; // Guards against duplicate dialog requests (null = idle)
 }
 ```
 
@@ -129,10 +133,12 @@ interface AppState {
 
 ### Message Protocol
 
+All frontend↔backend communication uses the Message Bus envelope format. See `design-bus-service.md` for full protocol spec.
+
 | Direction | Format | Example |
 |-----------|--------|---------|
-| JS → .NET | Plain string command | `"open-file"` |
-| .NET → JS | Plain string (result or empty) | `"C:\Users\me\docs\report.pdf"` or `""` |
+| JS → .NET | Envelope: `type\ncorrelationId\npayload` | `"open-file\nabc-123\n"` |
+| .NET → JS | Envelope: `type\ncorrelationId\npayload` | `"open-file\nabc-123\nC:\Users\me\report.pdf"` |
 
 ## Correctness Properties
 
@@ -158,16 +164,15 @@ interface AppState {
 
 | Test | Validates |
 |------|-----------|
-| Ctrl+O triggers `sendMessage("open-file")` | Req 3.1 |
+| Ctrl+O triggers `messageBus.send("open-file")` | Req 3.1 |
 | Other key combos don't trigger send | Req 3.1 |
 | `preventDefault` called on Ctrl+O in both states | Req 3.3 |
 | Cmd+O works (meta key) | Req 3.1 |
 | Initial `displayText` is "Hello World" | Req 6.1, 6.2 |
 | Non-empty response sets displayText | Req 5.1 |
 | Empty response leaves display unchanged | Req 5.2 |
-| Backend sends path on dialog confirm | Req 4.3 |
-| Backend sends "" on dialog cancel | Req 4.4 |
-| Backend ignores non-"open-file" messages | Req 4.5 |
+| Backend handler returns path on dialog confirm | Req 4.3 |
+| Backend handler returns "" on dialog cancel | Req 4.4 |
 | Angular `AppComponent` renders "Hello World" | Req 2.1 |
 | Window title is "Text Viewer" | Req 1.1 |
 
@@ -182,6 +187,7 @@ interface AppState {
 
 ### Test Boundaries
 
-- Frontend unit/property tests: mock `window.external.sendMessage`, simulate incoming messages
-- Backend integration tests: mock native dialog API, verify `SendWebMessage` calls
+- Frontend unit/property tests: mock `MessageBusClient.send()` and `subscribe()`, simulate responses via subscription handler
+- Backend unit tests: mock `IMessageBridge`, verify handler invocation and response encoding
+- Integration tests: real `MessageBusClient` with mocked bridge, verify full round-trip
 - No E2E browser automation — Photino bridge tested via integration
