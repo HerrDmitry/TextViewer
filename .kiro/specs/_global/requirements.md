@@ -39,10 +39,10 @@ TextViewer is a cross-platform desktop application for viewing text content. Thi
 
 #### Acceptance Criteria
 
-1. WHEN the user presses Ctrl+O on Windows/Linux or Cmd+O on macOS, THE Frontend SHALL send an "open-file" message to the Backend via the Message_Bridge
-2. WHILE the Frontend is awaiting a response from the Backend for a previous "open-file" message, THE Frontend SHALL not send additional "open-file" messages on subsequent Ctrl+O (or Cmd+O) key presses
+1. WHEN the user presses Ctrl+O on Windows/Linux or Cmd+O on macOS, THE Frontend SHALL send an "open-file" message to the Backend via Message_Bus_Client.send — direct calls to window.external.sendMessage SHALL be prohibited
+2. WHILE the Frontend is awaiting a response from the Backend for a previous "open-file" message (pendingCorrelationId is non-null), THE Frontend SHALL not send additional "open-file" messages on subsequent Ctrl+O (or Cmd+O) key presses
 3. THE Frontend SHALL prevent the browser default behavior for the Ctrl+O (or Cmd+O) key combination regardless of dialog state
-4. WHEN the Frontend receives a file-selection response from the Backend via the Message_Bridge, THE Frontend SHALL transition out of the awaiting-response state and resume accepting Ctrl+O (or Cmd+O) key presses
+4. WHEN the Frontend receives a file-selection response via Message_Bus_Client subscription, THE Frontend SHALL clear the pending state and resume accepting Ctrl+O (or Cmd+O) key presses
 
 ### Requirement 4: Native File Dialog Invocation
 
@@ -50,10 +50,10 @@ TextViewer is a cross-platform desktop application for viewing text content. Thi
 
 #### Acceptance Criteria
 
-1. WHEN the Backend receives an "open-file" message from the Message_Bridge, THE Backend SHALL display the native Open_File_Dialog
+1. WHEN the Backend's Message_Bus_Host receives an "open-file" message via its registered handler, THE Backend SHALL display the native Open_File_Dialog
 2. THE Open_File_Dialog SHALL allow the user to select exactly one file and SHALL not restrict the selectable file types
-3. WHEN the user selects a file and confirms the dialog, THE Backend SHALL send the full absolute file path of the selected file to the Frontend via the Message_Bridge
-4. WHEN the user cancels the Open_File_Dialog, THE Backend SHALL send an empty string to the Frontend via the Message_Bridge
+3. WHEN the user selects a file and confirms the dialog, THE Backend handler SHALL return the full absolute file path as the response payload
+4. WHEN the user cancels the Open_File_Dialog, THE Backend handler SHALL return an empty string as the response payload
 5. IF the Backend receives an "open-file" message while the Open_File_Dialog is already displayed, THEN THE Backend SHALL ignore the message and not open a second dialog
 
 ### Requirement 5: File Path Display
@@ -62,8 +62,8 @@ TextViewer is a cross-platform desktop application for viewing text content. Thi
 
 #### Acceptance Criteria
 
-1. WHEN the Frontend receives a non-empty string from the Message_Bridge, THE Frontend SHALL replace the Display_Area content with the full string value as received
-2. WHEN the Frontend receives an empty string from the Message_Bridge, THE Frontend SHALL retain the current Display_Area content unchanged
+1. WHEN the Frontend receives a non-empty payload via its Message_Bus_Client "open-file" subscription, THE Frontend SHALL replace the Display_Area content with the full string value as received
+2. WHEN the Frontend receives an empty string payload via its Message_Bus_Client "open-file" subscription, THE Frontend SHALL retain the current Display_Area content unchanged
 
 ### Requirement 6: Initial Display State
 

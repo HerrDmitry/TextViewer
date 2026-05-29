@@ -29,11 +29,10 @@
 
 ## Communication Model
 
-- Bidirectional string-based message bridge between Angular frontend and .NET backend
-- JS → .NET: `window.external.sendMessage(string)`
-- .NET → JS: `PhotinoWindow.SendWebMessage(string)`
-- Each feature defines its own command vocabulary
-- No JSON serialization unless payload complexity warrants it
+- Bidirectional message bridge between Angular frontend and .NET backend
+- All communication routed through **Message Bus** layer — direct raw bridge calls from application code prohibited
+- Raw transport: `window.external.sendMessage` (JS→.NET), `PhotinoWindow.SendWebMessage` (.NET→JS)
+- Full protocol, queuing, routing, and error specs: see `requirements-bus-service.md` / `design-bus-service.md`
 
 ## Cross-Platform Constraints
 
@@ -47,5 +46,8 @@
 - **Photino_Window**: The native OS window hosting web content
 - **Blazor_Host**: The Blazor host serving Angular content within Photino_Window
 - **Angular_Frontend**: The Angular application rendering the UI
-- **Message_Bridge**: Photino bidirectional communication channel
+- **Message_Bridge**: Photino bidirectional communication channel (raw transport layer)
+- **Message_Bus**: Application-level communication service on top of Message_Bridge (see `requirements-bus-service.md`)
+- **Message_Bus_Client**: Angular singleton — outbound queuing, inbound routing
+- **Message_Bus_Host**: .NET service — handler dispatch, response encoding
 - **Published_Executable**: Single-file self-contained binary from `dotnet publish`
