@@ -17,6 +17,7 @@ export class TextViewAreaComponent implements AfterViewInit, OnDestroy {
   readonly viewRows = this.state.activeViewRows;
   readonly viewError = this.state.activeViewError;
   readonly isViewPending = this.state.isViewPending;
+  readonly scrollbarState = this.state.activeScrollbarState;
 
   private resizeObserver: ResizeObserver | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;

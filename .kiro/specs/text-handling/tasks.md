@@ -4,6 +4,8 @@
 
 Connect the UI Shell's TextViewAreaComponent to the backend FileViewService via the Message Bus. After a file is opened, the backend waits 500ms for the scan to make initial progress, calls GetViewAsync with viewport dimensions from the request, and returns an Initial_View alongside the View_Session_ID and file path. The frontend renders this Initial_View immediately. When the full scan completes, the backend pushes a single "scan-complete" notification, and the frontend sends a refresh "get-view" request to obtain fully-indexed content.
 
+Additionally, scrollbar range tracking provides progressive visual feedback during scans: vertical scrollbar max = total line count, horizontal scrollbar max = max byte_length (quick scan) or max char_length (full scan), updated at 100ms polling intervals via a "get-scroll-info" backend handler.
+
 ## Tasks
 
 - [x] 1. Extend types and backend session infrastructure
@@ -214,6 +216,113 @@ Connect the UI Shell's TextViewAreaComponent to the backend FileViewService via 
 - [x] 8. Final checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [x] 9. Implement scrollbar backend support
+  - [x] 9.1 Add get-scroll-info handler in Program.cs
+    - Register `messageBus.RegisterHandler("get-scroll-info", ...)` that takes viewSessionId as payload
+    - Look up FileViewService from sessions dictionary; return `ERROR:Session not found: {viewSessionId}` if missing
+    - Read `service.ScanState` and `service.LineIndex`
+    - Iterate `LineIndex` up to `LineCount` to compute max byte_length and max char_length across all discovered lines
+    - Return response as `scanState\nlineCount\nmaxByteLength\nmaxCharLength` (4 newline-delimited fields)
+    - _Requirements: 9.1, 9.2, 10.1, 10.2, 11.1_
+
+  - [x] 9.2 Expose LineIndex property on FileViewService
+    - Add public property `public LineIndex LineIndex => _fileIndex.Index;` to `Services/FileViewService.cs`
+    - This allows the get-scroll-info handler to access line count and per-line byte/char lengths without going through GetViewAsync
+    - _Requirements: 9.1, 10.1, 11.1_
+
+- [x] 10. Checkpoint - Verify backend scrollbar handler compiles
+  - Ensure `dotnet build` succeeds, ask the user if questions arise.
+
+- [x] 11. Implement frontend scrollbar types and polling logic
+  - [x] 11.1 Add ScrollInfo, ScanStateValue, and ScrollbarState types to shell.types.ts
+    - Add `ScrollInfo` interface with fields: `lineCount: number`, `maxByteLength: number`, `maxCharLength: number`, `scanState: ScanStateValue`
+    - Add `ScanStateValue` type union: `'NotStarted' | 'QuickScanInProgress' | 'QuickScanComplete' | 'FullScanInProgress' | 'FullScanComplete' | 'Failed' | 'Cancelled'`
+    - Add `ScrollbarState` interface with fields: `verticalMax: number`, `horizontalMax: number`, `disabled: boolean`
+    - Extend `TabViewState` interface to include `scrollbarState: ScrollbarState` field
+    - _Requirements: 9.1, 9.2, 10.1, 10.2, 10.3, 10.4_
+
+  - [x] 11.2 Implement scrollbar polling logic in ShellStateService
+    - Add private fields: `scrollPollTimer: ReturnType<typeof setInterval> | null`, `scrollPollSessionId: string | null`
+    - Implement `startScrollPolling(viewSessionId: string)`: stop existing polling, set interval at 100ms sending `messageBus.send('get-scroll-info', viewSessionId)`, fire immediate first poll
+    - Implement `stopScrollPolling()`: clear interval, null out session ID
+    - Subscribe to "get-scroll-info" responses and route to `handleScrollInfoResponse`
+    - Implement `handleScrollInfoResponse(msg: InboundMessage)`: parse 4-field response (`scanState\nlineCount\nmaxByteLength\nmaxCharLength`), compute horizontalMax via `computeHorizontalMax`, update TabViewState scrollbarState, stop polling on terminal states (QuickScanComplete, FullScanComplete, Failed, Cancelled), set scrollbar to zero on Failed/Cancelled
+    - Export `computeHorizontalMax(scanState, maxByteLength, maxCharLength)` pure function: QuickScanInProgress/QuickScanComplete → maxByteLength; FullScanInProgress/FullScanComplete → maxCharLength; default → 0
+    - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.6_
+
+  - [x] 11.3 Implement scrollbar polling lifecycle (tab-switch and open-file triggers)
+    - On open-file response received (after creating TabViewState): call `startScrollPolling(viewSessionId)` since scan starts in QuickScanInProgress
+    - On active tab change: if new active tab's scrollbarState indicates scan in progress (verticalMax or horizontalMax may still be updating), start polling for new tab; if scan complete, stop polling (values already cached)
+    - On tab close while polling is active for that tab: call `stopScrollPolling()`
+    - On scan-complete notification received: perform one final get-scroll-info poll, then stop polling
+    - Initialize `scrollbarState` in new TabViewState to `{ verticalMax: 0, horizontalMax: 0, disabled: true }`
+    - _Requirements: 11.2, 11.4, 11.5, 9.5, 10.7_
+
+  - [x] 11.4 Add activeScrollbarState computed signal to ShellStateService
+    - Add `readonly activeScrollbarState = computed(() => { ... })` that reads active tab's viewSessionId, looks up TabViewState, returns `scrollbarState` or null if no active tab
+    - This signal drives the TextViewAreaComponent scrollbar rendering
+    - _Requirements: 9.1, 9.5, 10.1, 10.7_
+
+- [x] 12. Implement scrollbar rendering in TextViewAreaComponent
+  - [x] 12.1 Add scrollbar UI elements to TextViewAreaComponent template and styles
+    - Add `scrollbarState` signal reference from `state.activeScrollbarState`
+    - Add vertical scrollbar element: display when `scrollbarState()` is non-null and not disabled, show `verticalMax` as the range indicator
+    - Add horizontal scrollbar element: display when `scrollbarState()` is non-null and not disabled, show `horizontalMax` as the range indicator
+    - Both scrollbars disabled (hidden or non-interactive) when `scrollbarState()?.disabled` is true or values are zero
+    - Style scrollbars with appropriate CSS (positioned at right edge for vertical, bottom edge for horizontal)
+    - _Requirements: 9.1, 9.4, 10.1, 10.6, 11.4_
+
+- [x] 13. Checkpoint - Verify scrollbar build
+  - Ensure `dotnet build` succeeds and `npx ng build` succeeds in ClientApp, ask the user if questions arise.
+
+- [x] 14. Scrollbar property tests and unit tests
+  - [x] 14.1 Write property test: Scrollbar vertical max correctness (Property 9)
+    - **Property 9: Vertical scrollbar max equals line count**
+    - **Validates: Requirements 9.1, 9.2, 9.3**
+    - Test file: `ClientApp/src/app/shell/text-handling.property.spec.ts`
+    - Generate random line counts (0–100000), random scan states
+    - Assert: verticalMax always equals lineCount from ScrollInfo; verticalMax = 0 when lineCount = 0; disabled when both maxes are 0
+    - Use fast-check with `{ numRuns: 10 }`
+
+  - [x] 14.2 Write property test: Horizontal max source selection (Property 10)
+    - **Property 10: Horizontal scrollbar source depends on scan state**
+    - **Validates: Requirements 10.1, 10.2, 10.3, 10.4, 10.5**
+    - Test file: `ClientApp/src/app/shell/text-handling.property.spec.ts`
+    - Generate random maxByteLength (0–100000), maxCharLength (0–100000), random scan states
+    - Assert: QuickScanInProgress/QuickScanComplete → horizontalMax = maxByteLength; FullScanInProgress/FullScanComplete → horizontalMax = maxCharLength; NotStarted/Failed/Cancelled → horizontalMax = 0
+    - Use fast-check with `{ numRuns: 10 }`
+
+  - [x] 14.3 Write property test: Polling lifecycle invariant (Property 11)
+    - **Property 11: Polling active only during in-progress scan states**
+    - **Validates: Requirements 11.1, 11.2, 11.4, 11.5, 11.6**
+    - Test file: `ClientApp/src/app/shell/text-handling.property.spec.ts`
+    - Generate random event sequences from {openFile, tabSwitch, scrollInfoResponse(terminal), scrollInfoResponse(inProgress), closeTab} (length 1–15)
+    - Assert: polling active iff active tab has in-progress scan; polling stops on terminal state; polling stops on tab close; polling restarts on tab switch to in-progress tab
+    - Use fast-check with `{ numRuns: 10 }`
+
+  - [x] 14.4 Write unit tests for scrollbar behavior
+    - Test `computeHorizontalMax` returns maxByteLength for QuickScanInProgress
+    - Test `computeHorizontalMax` returns maxByteLength for QuickScanComplete
+    - Test `computeHorizontalMax` returns maxCharLength for FullScanInProgress
+    - Test `computeHorizontalMax` returns maxCharLength for FullScanComplete
+    - Test `computeHorizontalMax` returns 0 for NotStarted, Failed, Cancelled
+    - Test `handleScrollInfoResponse` parses 4-field payload correctly
+    - Test `handleScrollInfoResponse` ignores ERROR: responses
+    - Test `handleScrollInfoResponse` ignores malformed payloads (wrong field count, NaN)
+    - Test `startScrollPolling` sends immediate first poll
+    - Test `startScrollPolling` sends at 100ms intervals
+    - Test `stopScrollPolling` clears interval
+    - Test polling stops on FullScanComplete response
+    - Test polling stops on Failed response and sets scrollbar to zero
+    - Test tab switch stops old polling and starts new if in-progress
+    - Test `activeScrollbarState` returns null when no active tab
+    - Test `activeScrollbarState` returns cached scrollbarState for active tab
+    - Test scrollbar disabled when verticalMax = 0 and horizontalMax = 0
+    - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 10.1, 10.2, 10.3, 10.4, 10.5, 10.6, 10.7, 11.1, 11.2, 11.3, 11.4, 11.5, 11.6_
+
+- [x] 15. Final checkpoint - Ensure all scrollbar tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
@@ -226,18 +335,22 @@ Connect the UI Shell's TextViewAreaComponent to the backend FileViewService via 
 - The open-file response format is now `viewSessionId\nfilePath\nrow1\nrow2\n...` — Initial_View rows included
 - The open-file request payload is now `rowCount\ncolCount` — viewport dimensions sent to backend
 - MonitorScanState only sends scan-complete at FullScanComplete (QuickScanComplete push removed)
-- Tasks 1.2, 1.5, 3.4, 3.5 are the new tasks implementing Requirement 8 changes
+- Tasks 1.2, 1.5, 3.4, 3.5 are the tasks that implemented Requirement 8 changes
+- Tasks 9–15 implement Requirements 9, 10, 11 (scrollbar range tracking and progressive updates)
+- The get-scroll-info handler is stateless — reads current LineIndex snapshot on each call
+- `computeHorizontalMax` is a pure function exported for testability
+- Scrollbar polling is tied to the active tab lifecycle — stops on tab switch/close, restarts as needed
 
 ## Task Dependency Graph
 
 ```json
 {
   "waves": [
-    { "id": 0, "tasks": ["1.2", "1.5"] },
-    { "id": 1, "tasks": ["3.4", "3.5"] },
-    { "id": 2, "tasks": ["3.6", "3.7", "3.8", "3.9", "3.10"] },
-    { "id": 3, "tasks": ["4.3", "4.4", "6.1", "6.2"] },
-    { "id": 4, "tasks": ["7.1", "7.2"] }
+    { "id": 0, "tasks": ["9.1", "9.2"] },
+    { "id": 1, "tasks": ["11.1"] },
+    { "id": 2, "tasks": ["11.2", "11.3"] },
+    { "id": 3, "tasks": ["11.4", "12.1"] },
+    { "id": 4, "tasks": ["14.1", "14.2", "14.3", "14.4"] }
   ]
 }
 ```

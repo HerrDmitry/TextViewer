@@ -2,7 +2,30 @@ import { computed, Injectable, inject, OnDestroy, signal } from '@angular/core';
 import { MessageBusClient } from '../services/message-bus-client.service';
 import { InboundMessage, SubscriptionHandle } from '../services/message-bus.types';
 import { extractFileName } from './extract-file-name';
-import { Tab, TabPosition, TabViewState, ViewDimensions } from './shell.types';
+import { Tab, TabPosition, TabViewState, ScrollbarState, ScanStateValue, ViewDimensions } from './shell.types';
+
+/**
+ * Compute horizontal scrollbar max based on scan state.
+ * QuickScanInProgress / QuickScanComplete → maxByteLength
+ * FullScanInProgress / FullScanComplete → maxCharLength
+ * Default (NotStarted, Failed, Cancelled) → 0
+ */
+export function computeHorizontalMax(
+  scanState: ScanStateValue,
+  maxByteLength: number,
+  maxCharLength: number
+): number {
+  switch (scanState) {
+    case 'QuickScanInProgress':
+    case 'QuickScanComplete':
+      return maxByteLength;
+    case 'FullScanInProgress':
+    case 'FullScanComplete':
+      return maxCharLength;
+    default:
+      return 0;
+  }
+}
 
 /**
  * ShellStateService — single source of truth for all shell UI state.
@@ -48,12 +71,23 @@ export class ShellStateService implements OnDestroy {
     const state = this.tabViewStates().get(tab.viewSessionId);
     return state?.pendingCorrelationId !== null;
   });
+  readonly activeScrollbarState = computed(() => {
+    const tab = this.activeTab();
+    if (!tab) return null;
+    const state = this.tabViewStates().get(tab.viewSessionId);
+    return state?.scrollbarState ?? null;
+  });
 
   // --- Dependencies ---
   private readonly messageBus = inject(MessageBusClient);
   private subscription: SubscriptionHandle | undefined;
   private scanCompleteSubscription: SubscriptionHandle | undefined;
   private getViewSubscription: SubscriptionHandle | undefined;
+  private scrollInfoSubscription: SubscriptionHandle | undefined;
+
+  // --- Scrollbar polling state ---
+  private scrollPollTimer: ReturnType<typeof setInterval> | null = null;
+  private scrollPollSessionId: string | null = null;
 
   private static readonly ERROR_PREFIX = 'ERROR:';
 
@@ -115,8 +149,12 @@ export class ShellStateService implements OnDestroy {
         errorMessage: null,
         pendingCorrelationId: null,
         deferred: false,
+        scrollbarState: { verticalMax: 0, horizontalMax: 0, disabled: true },
       });
       this.tabViewStates.set(updatedStates);
+
+      // Start scrollbar polling — scan starts in QuickScanInProgress
+      this.startScrollPolling(viewSessionId);
     });
 
     // Configure scan-complete with accumulate queue mode before subscribing
@@ -129,12 +167,19 @@ export class ShellStateService implements OnDestroy {
     this.getViewSubscription = this.messageBus.subscribe('get-view', (msg: InboundMessage) => {
       this.handleViewResponse(msg);
     });
+
+    // Subscribe to get-scroll-info responses
+    this.scrollInfoSubscription = this.messageBus.subscribe('get-scroll-info', (msg: InboundMessage) => {
+      this.handleScrollInfoResponse(msg);
+    });
   }
 
   ngOnDestroy(): void {
     this.subscription?.unsubscribe();
     this.scanCompleteSubscription?.unsubscribe();
     this.getViewSubscription?.unsubscribe();
+    this.scrollInfoSubscription?.unsubscribe();
+    this.stopScrollPolling();
   }
 
   // --- Actions ---
@@ -175,6 +220,21 @@ export class ShellStateService implements OnDestroy {
       }
     }
 
+    // Manage scrollbar polling on tab switch
+    const newTab = this.activeTab();
+    if (newTab) {
+      const newState = this.tabViewStates().get(newTab.viewSessionId);
+      if (newState && !newState.scanComplete) {
+        // Scan still in progress for new tab — start polling
+        this.startScrollPolling(newTab.viewSessionId);
+      } else {
+        // Scan complete (values already cached) or no state — stop polling
+        this.stopScrollPolling();
+      }
+    } else {
+      this.stopScrollPolling();
+    }
+
     this.tryTriggerViewRequest();
   }
 
@@ -184,6 +244,11 @@ export class ShellStateService implements OnDestroy {
     if (index === -1) return;
 
     const closedTab = currentTabs[index];
+
+    // Stop scrollbar polling if active for this tab
+    if (this.scrollPollSessionId === closedTab.viewSessionId) {
+      this.stopScrollPolling();
+    }
 
     // Cancel pending/deferred for this tab (Requirement 2.7)
     const states = this.tabViewStates();
@@ -260,8 +325,15 @@ export class ShellStateService implements OnDestroy {
         errorMessage: null,
         pendingCorrelationId: null,
         deferred: false,
+        scrollbarState: { verticalMax: 0, horizontalMax: 0, disabled: true },
       });
       this.tabViewStates.set(updated);
+    }
+
+    // Perform one final get-scroll-info poll, then stop polling
+    if (this.scrollPollSessionId === viewSessionId) {
+      this.messageBus.send('get-scroll-info', viewSessionId);
+      this.stopScrollPolling();
     }
 
     this.tryTriggerViewRequest();
@@ -352,6 +424,74 @@ export class ShellStateService implements OnDestroy {
       pendingCorrelationId: correlationId,
       deferred: false,
     });
+    this.tabViewStates.set(updated);
+  }
+
+  // --- Private: scrollbar polling ---
+
+  startScrollPolling(viewSessionId: string): void {
+    this.stopScrollPolling();
+    this.scrollPollSessionId = viewSessionId;
+    this.scrollPollTimer = setInterval(() => {
+      if (this.scrollPollSessionId) {
+        this.messageBus.send('get-scroll-info', this.scrollPollSessionId);
+      }
+    }, 100);
+    // Immediate first poll
+    this.messageBus.send('get-scroll-info', viewSessionId);
+  }
+
+  stopScrollPolling(): void {
+    if (this.scrollPollTimer !== null) {
+      clearInterval(this.scrollPollTimer);
+      this.scrollPollTimer = null;
+    }
+    this.scrollPollSessionId = null;
+  }
+
+  private handleScrollInfoResponse(msg: InboundMessage): void {
+    const payload = msg.payload;
+    if (payload.startsWith('ERROR:')) return;
+
+    // Parse: scanState\nlineCount\nmaxByteLength\nmaxCharLength
+    const fields = payload.split('\n');
+    if (fields.length !== 4) return;
+
+    const scanState = fields[0] as ScanStateValue;
+    const lineCount = parseInt(fields[1], 10);
+    const maxByteLength = parseInt(fields[2], 10);
+    const maxCharLength = parseInt(fields[3], 10);
+
+    if (isNaN(lineCount) || isNaN(maxByteLength) || isNaN(maxCharLength)) return;
+
+    const horizontalMax = computeHorizontalMax(scanState, maxByteLength, maxCharLength);
+    const verticalMax = lineCount;
+    const disabled = verticalMax === 0 && horizontalMax === 0;
+
+    const sessionId = this.scrollPollSessionId;
+    if (!sessionId) return;
+
+    this.updateTabScrollbar(sessionId, { verticalMax, horizontalMax, disabled });
+
+    // Stop polling if scan reached terminal state
+    if (scanState === 'QuickScanComplete' || scanState === 'FullScanComplete'
+        || scanState === 'Failed' || scanState === 'Cancelled') {
+      this.stopScrollPolling();
+
+      // On failure/cancel, set scrollbar to zero
+      if (scanState === 'Failed' || scanState === 'Cancelled') {
+        this.updateTabScrollbar(sessionId, { verticalMax: 0, horizontalMax: 0, disabled: true });
+      }
+    }
+  }
+
+  private updateTabScrollbar(sessionId: string, scrollbarState: ScrollbarState): void {
+    const currentStates = this.tabViewStates();
+    const existing = currentStates.get(sessionId);
+    if (!existing) return;
+
+    const updated = new Map(currentStates);
+    updated.set(sessionId, { ...existing, scrollbarState });
     this.tabViewStates.set(updated);
   }
 

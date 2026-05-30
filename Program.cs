@@ -95,6 +95,11 @@ public class Program
             return Task.FromResult<string?>(null); // fire-and-forget
         });
 
+        messageBus.RegisterHandler("get-scroll-info", (correlationId, payload) =>
+        {
+            return Task.FromResult<string?>(HandleGetScrollInfo(payload, sessions, sessionLock));
+        });
+
         messageBus.RegisterHandler("exit", (correlationId, payload) =>
         {
             app.MainWindow.Close();
@@ -202,6 +207,48 @@ public class Program
                 service.Dispose();
             }
         }
+    }
+
+    /// <summary>
+    /// Handles "get-scroll-info" message: looks up session, reads ScanState and LineIndex,
+    /// computes max byte_length and max char_length, returns scanState\nlineCount\nmaxByteLength\nmaxCharLength.
+    /// Extracted for testability.
+    /// </summary>
+    internal static string HandleGetScrollInfo(
+        string payload,
+        Dictionary<string, FileViewService> sessions,
+        object sessionLock)
+    {
+        var viewSessionId = payload;
+
+        FileViewService? service;
+        lock (sessionLock)
+        {
+            sessions.TryGetValue(viewSessionId, out service);
+        }
+
+        if (service is null)
+            return $"ERROR:Session not found: {viewSessionId}";
+
+        var scanState = service.ScanState;
+        var lineIndex = service.LineIndex;
+        var lineCount = lineIndex.LineCount;
+
+        // Compute max byte_length and max char_length by iterating
+        ulong maxByteLength = 0;
+        ulong maxCharLength = 0;
+        for (int i = 0; i < lineCount; i++)
+        {
+            var byteLen = lineIndex.GetByteLength(i);
+            if (byteLen > maxByteLength) maxByteLength = byteLen;
+
+            var charLen = lineIndex.GetCharLength(i);
+            if (charLen.HasValue && charLen.Value > maxCharLength)
+                maxCharLength = charLen.Value;
+        }
+
+        // Response: scanState\nlineCount\nmaxByteLength\nmaxCharLength
+        return $"{scanState}\n{lineCount}\n{maxByteLength}\n{maxCharLength}";
     }
 
     /// <summary>

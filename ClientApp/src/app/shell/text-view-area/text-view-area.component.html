@@ -10,4 +10,21 @@
       }
     </div>
   }
+
+  @if (scrollbarState(); as sb) {
+    @if (!sb.disabled) {
+      <div class="scrollbar-vertical" aria-label="Vertical scrollbar">
+        <div class="scrollbar-track">
+          <div class="scrollbar-thumb"></div>
+        </div>
+        <span class="scrollbar-max">{{ sb.verticalMax }}</span>
+      </div>
+      <div class="scrollbar-horizontal" aria-label="Horizontal scrollbar">
+        <div class="scrollbar-track">
+          <div class="scrollbar-thumb"></div>
+        </div>
+        <span class="scrollbar-max">{{ sb.horizontalMax }}</span>
+      </div>
+    }
+  }
 </div>

@@ -25,6 +25,8 @@ export interface TabViewState {
   pendingCorrelationId: string | null;
   /** True if trigger fired before measurement was ready */
   deferred: boolean;
+  /** Current scrollbar max values for this tab */
+  scrollbarState: ScrollbarState;
 }
 
 /** Computed viewport dimensions in character units */
@@ -33,4 +35,36 @@ export interface ViewDimensions {
   rowCount: number;
   /** Number of text columns that fit horizontally */
   colCount: number;
+}
+
+/** Mirrors backend ScanState enum values */
+export type ScanStateValue =
+  | 'NotStarted'
+  | 'QuickScanInProgress'
+  | 'QuickScanComplete'
+  | 'FullScanInProgress'
+  | 'FullScanComplete'
+  | 'Failed'
+  | 'Cancelled';
+
+/** Scrollbar dimension data from backend get-scroll-info response */
+export interface ScrollInfo {
+  /** Total line count from LineIndex */
+  lineCount: number;
+  /** Maximum byte_length across all discovered lines */
+  maxByteLength: number;
+  /** Maximum char_length across all lines with char_length computed (0 if none computed yet) */
+  maxCharLength: number;
+  /** Current scan state as reported by backend */
+  scanState: ScanStateValue;
+}
+
+/** Computed scrollbar max values for a tab */
+export interface ScrollbarState {
+  /** Vertical scrollbar max = total line count */
+  verticalMax: number;
+  /** Horizontal scrollbar max = max byte_length or max char_length depending on scan state */
+  horizontalMax: number;
+  /** Whether scrollbars are disabled (zero values) */
+  disabled: boolean;
 }

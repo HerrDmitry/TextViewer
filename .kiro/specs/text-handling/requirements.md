@@ -22,6 +22,13 @@ The flow has two phases: (1) an initial view delivered proactively by the backen
 - **Initial_View**: The text view data (rows up to viewport dimensions) sent proactively by the backend after a 500ms scan delay as part of the open-file response flow, before the full scan completes
 - **Scan_Complete_Notification**: A "scan-complete" message pushed from backend to frontend indicating the full file scan has completed for a given View_Session_ID; triggers a refresh request from the frontend
 - **Get_View_Handler**: The backend message handler registered for "get-view" messages that invokes FileViewService.GetViewAsync
+- **Vertical_Scrollbar**: The scrollbar control reflecting the total number of lines in the file, enabling vertical navigation through the document
+- **Horizontal_Scrollbar**: The scrollbar control reflecting the maximum character width across all lines in the file, enabling horizontal navigation through wide content
+- **Scrollbar_Max**: The maximum value of a scrollbar, representing the full extent of the content dimension (total lines for vertical, max character width for horizontal)
+- **Progressive_Update_Interval**: The 100-millisecond interval at which scrollbar max values are refreshed during an active scan to reflect current scan progress
+- **Scrollbar_Track**: The visual background strip (14px) containing the thumb indicator, positioned at the right edge (vertical) or bottom edge (horizontal) of the Text_View_Area
+- **Scrollbar_Thumb**: The draggable indicator element within the Scrollbar_Track representing the current viewport position relative to total content; currently static until scroll navigation is implemented
+- **Scrollbar_Label**: A numeric display at the end of each scrollbar track showing the current Scrollbar_Max value (total lines for vertical, max width for horizontal)
 
 ## Requirements
 
@@ -132,3 +139,44 @@ The flow has two phases: (1) an initial view delivered proactively by the backen
 6. IF the viewport dimensions are not yet available when the open-file request is sent, THEN THE frontend SHALL send default dimensions (a reasonable fallback such as 40 rows and 120 columns) so the backend can produce an Initial_View
 7. WHEN the frontend subsequently receives a Scan_Complete_Notification for the same View_Session_ID, THE frontend SHALL send a refresh View_Request per Requirement 2 to replace the Initial_View with fully-scanned content
 
+
+### Requirement 9: Vertical Scrollbar Range
+
+**User Story:** As a user, I want the vertical scrollbar to reflect the total number of lines in the file, so that I can gauge the file's length and navigate vertically.
+
+#### Acceptance Criteria
+
+1. WHEN a file is opened and scan data is available for the active tab's View_Session_ID, THE Vertical_Scrollbar SHALL set its Scrollbar_Max to the total line count from the FileIndex Line_Index for that session
+2. WHEN the caller observes ScanState = QuickScanComplete or FullScanComplete for the active tab's session, THE Vertical_Scrollbar SHALL update its Scrollbar_Max to the final total line count from the FileIndex Line_Index
+3. WHILE ScanState = QuickScanInProgress for the active tab's session, THE Vertical_Scrollbar SHALL set its Scrollbar_Max to the total number of lines discovered so far in the Line_Index, updated at each Progressive_Update_Interval
+4. IF the total line count is zero (empty file), THEN THE Vertical_Scrollbar SHALL set Scrollbar_Max to zero and remain in a disabled or non-interactive state
+5. WHEN the active tab changes to a different tab, THE Vertical_Scrollbar SHALL update its Scrollbar_Max to reflect the line count of the newly active tab's session
+6. THE Vertical_Scrollbar SHALL be rendered as a visual scrollbar track with a thumb indicator positioned at the right edge of the Text_View_Area, alongside a numeric label displaying the Scrollbar_Max value at the bottom of the track
+
+### Requirement 10: Horizontal Scrollbar Range
+
+**User Story:** As a user, I want the horizontal scrollbar to reflect the maximum line width in the file, so that I can gauge the widest content and navigate horizontally.
+
+#### Acceptance Criteria
+
+1. WHEN a file is opened and scan data is available for the active tab's View_Session_ID, THE Horizontal_Scrollbar SHALL set its Scrollbar_Max to the maximum Char_Length across all lines in the FileIndex Line_Index for that session
+2. WHEN the caller observes ScanState = FullScanComplete for the active tab's session, THE Horizontal_Scrollbar SHALL update its Scrollbar_Max to the final maximum Char_Length across all lines from the FileIndex Line_Index
+3. WHILE ScanState = QuickScanInProgress for the active tab's session, THE Horizontal_Scrollbar SHALL set its Scrollbar_Max to the maximum Byte_Length across all lines discovered so far in the Line_Index (bytes per line, not decoded characters), updated at each Progressive_Update_Interval
+4. WHILE ScanState = FullScanInProgress for the active tab's session, THE Horizontal_Scrollbar SHALL set its Scrollbar_Max to the maximum Char_Length across all lines computed so far in the Line_Index (actual decoded characters), updated at each Progressive_Update_Interval
+5. WHEN the caller observes ScanState = QuickScanComplete AND FullScanInProgress has not yet started, THE Horizontal_Scrollbar SHALL display the maximum Byte_Length as an interim Scrollbar_Max until Char_Length values become available
+6. IF the maximum width value is zero (empty file or all lines have zero length), THEN THE Horizontal_Scrollbar SHALL set Scrollbar_Max to zero and remain in a disabled or non-interactive state
+7. WHEN the active tab changes to a different tab, THE Horizontal_Scrollbar SHALL update its Scrollbar_Max to reflect the maximum width of the newly active tab's session
+8. THE Horizontal_Scrollbar SHALL be rendered as a visual scrollbar track with a thumb indicator positioned at the bottom edge of the Text_View_Area, alongside a numeric label displaying the Scrollbar_Max value at the right end of the track
+
+### Requirement 11: Progressive Scrollbar Updates During Scan
+
+**User Story:** As a user, I want the scrollbars to update progressively while a large file is being scanned, so that I get visual feedback about the file's dimensions before the scan completes.
+
+#### Acceptance Criteria
+
+1. WHILE ScanState = QuickScanInProgress or FullScanInProgress for the active tab's session, THE frontend SHALL poll the FileIndex Line_Index at a Progressive_Update_Interval of 100 milliseconds and update the Vertical_Scrollbar and Horizontal_Scrollbar Scrollbar_Max values with the current scan progress
+2. THE progressive polling SHALL begin when the frontend observes ScanState transition to QuickScanInProgress for the active tab's session and SHALL cease when ScanState transitions to QuickScanComplete, FullScanComplete, Failed, or Cancelled
+3. WHEN progressive polling is active and the scan transitions from QuickScanInProgress to FullScanInProgress, THE frontend SHALL continue polling at the same Progressive_Update_Interval without interruption; the Horizontal_Scrollbar source value SHALL transition from maximum Byte_Length to maximum Char_Length at the point where FullScanInProgress is observed
+4. WHEN the scan completes (ScanState transitions to QuickScanComplete or FullScanComplete), THE frontend SHALL perform one final update to set both scrollbar Scrollbar_Max values to the definitive final values from the completed scan phase, regardless of the polling interval
+5. IF the active tab changes while progressive polling is active, THEN THE frontend SHALL stop polling for the previously active tab and start polling for the newly active tab if its session scan is still in progress
+6. IF the active tab's session ScanState is Failed or Cancelled, THEN THE frontend SHALL stop progressive polling and set both scrollbar Scrollbar_Max values to zero

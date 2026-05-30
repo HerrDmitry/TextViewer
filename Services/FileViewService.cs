@@ -27,6 +27,9 @@ public sealed class FileViewService : IDisposable
     /// <summary>Reflects FileIndex.State for lifecycle observation.</summary>
     public ScanState ScanState => _fileIndex.State;
 
+    /// <summary>Exposes the LineIndex for direct access to line count and per-line lengths.</summary>
+    public LineIndex LineIndex => _fileIndex.Index;
+
     /// <summary>
     /// Extracts a rectangular view region from the file.
     /// Opens an independent file handle per call for concurrent safety.

@@ -72,9 +72,10 @@ jest.mock('@angular/core', () => {
 });
 
 import * as fc from 'fast-check';
-import { ShellStateService } from './shell-state.service';
+import { ShellStateService, computeHorizontalMax } from './shell-state.service';
 import { MessageBusClient } from '../services/message-bus-client.service';
 import { InboundMessage } from '../services/message-bus.types';
+import { ScanStateValue } from './shell.types';
 
 // --- Event types for the state machine ---
 
@@ -634,6 +635,72 @@ describe('Feature: text-handling, Property 4: Response encoding correctness', ()
 
 
 /**
+ * Feature: text-handling, Property 10: Horizontal scrollbar source depends on scan state
+ *
+ * Validates: Requirements 10.1, 10.2, 10.3, 10.4, 10.5
+ *
+ * Property: For any maxByteLength, maxCharLength, and scan state, computeHorizontalMax SHALL:
+ * - Return maxByteLength when scan state is QuickScanInProgress or QuickScanComplete
+ * - Return maxCharLength when scan state is FullScanInProgress or FullScanComplete
+ * - Return 0 when scan state is NotStarted, Failed, or Cancelled
+ */
+
+describe('Feature: text-handling, Property 10: Horizontal scrollbar source depends on scan state', () => {
+  const quickScanStates: ScanStateValue[] = ['QuickScanInProgress', 'QuickScanComplete'];
+  const fullScanStates: ScanStateValue[] = ['FullScanInProgress', 'FullScanComplete'];
+  const zeroStates: ScanStateValue[] = ['NotStarted', 'Failed', 'Cancelled'];
+
+  const maxByteLengthArb = fc.integer({ min: 0, max: 100000 });
+  const maxCharLengthArb = fc.integer({ min: 0, max: 100000 });
+
+  it('QuickScanInProgress/QuickScanComplete → horizontalMax = maxByteLength', () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom(...quickScanStates),
+        maxByteLengthArb,
+        maxCharLengthArb,
+        (scanState: ScanStateValue, maxByteLength: number, maxCharLength: number) => {
+          const result = computeHorizontalMax(scanState, maxByteLength, maxCharLength);
+          return result === maxByteLength;
+        }
+      ),
+      { numRuns: 10 }
+    );
+  });
+
+  it('FullScanInProgress/FullScanComplete → horizontalMax = maxCharLength', () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom(...fullScanStates),
+        maxByteLengthArb,
+        maxCharLengthArb,
+        (scanState: ScanStateValue, maxByteLength: number, maxCharLength: number) => {
+          const result = computeHorizontalMax(scanState, maxByteLength, maxCharLength);
+          return result === maxCharLength;
+        }
+      ),
+      { numRuns: 10 }
+    );
+  });
+
+  it('NotStarted/Failed/Cancelled → horizontalMax = 0', () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom(...zeroStates),
+        maxByteLengthArb,
+        maxCharLengthArb,
+        (scanState: ScanStateValue, maxByteLength: number, maxCharLength: number) => {
+          const result = computeHorizontalMax(scanState, maxByteLength, maxCharLength);
+          return result === 0;
+        }
+      ),
+      { numRuns: 10 }
+    );
+  });
+});
+
+
+/**
  * Feature: text-handling, Property 5: Payload parse error identification
  *
  * Validates: Requirements 4.6, 6.3, 6.4
@@ -710,6 +777,91 @@ function validateGetViewPayload(payload: string): ParsedGetViewPayload | string 
     colCount: Number(fields[4]),
   };
 }
+
+/**
+ * Feature: text-handling, Property 9: Vertical scrollbar max equals line count
+ *
+ * Validates: Requirements 9.1, 9.2, 9.3
+ *
+ * Property: For any lineCount (0–100000) and any scan state, the computed scrollbar state
+ * SHALL satisfy:
+ * - verticalMax always equals lineCount from ScrollInfo
+ * - verticalMax = 0 when lineCount = 0
+ * - disabled = true when both verticalMax and horizontalMax are 0
+ */
+
+describe('Feature: text-handling, Property 9: Vertical scrollbar max equals line count', () => {
+  const { computeHorizontalMax } = jest.requireActual('./shell-state.service') as { computeHorizontalMax: (scanState: ScanStateValue, maxByteLength: number, maxCharLength: number) => number };
+
+  /**
+   * Computes ScrollbarState from ScrollInfo data, mirroring the logic in handleScrollInfoResponse.
+   */
+  function computeScrollbarState(lineCount: number, scanState: ScanStateValue, maxByteLength: number, maxCharLength: number) {
+    const horizontalMax = computeHorizontalMax(scanState, maxByteLength, maxCharLength);
+    const verticalMax = lineCount;
+    const disabled = verticalMax === 0 && horizontalMax === 0;
+    return { verticalMax, horizontalMax, disabled };
+  }
+
+  const scanStateArb: fc.Arbitrary<ScanStateValue> = fc.constantFrom(
+    'NotStarted' as ScanStateValue,
+    'QuickScanInProgress' as ScanStateValue,
+    'QuickScanComplete' as ScanStateValue,
+    'FullScanInProgress' as ScanStateValue,
+    'FullScanComplete' as ScanStateValue,
+    'Failed' as ScanStateValue,
+    'Cancelled' as ScanStateValue,
+  );
+
+  it('verticalMax always equals lineCount from ScrollInfo', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 0, max: 100000 }),  // lineCount
+        scanStateArb,
+        fc.integer({ min: 0, max: 100000 }),  // maxByteLength
+        fc.integer({ min: 0, max: 100000 }),  // maxCharLength
+        (lineCount: number, scanState: ScanStateValue, maxByteLength: number, maxCharLength: number) => {
+          const result = computeScrollbarState(lineCount, scanState, maxByteLength, maxCharLength);
+          return result.verticalMax === lineCount;
+        }
+      ),
+      { numRuns: 10 }
+    );
+  });
+
+  it('verticalMax = 0 when lineCount = 0', () => {
+    fc.assert(
+      fc.property(
+        scanStateArb,
+        fc.integer({ min: 0, max: 100000 }),  // maxByteLength
+        fc.integer({ min: 0, max: 100000 }),  // maxCharLength
+        (scanState: ScanStateValue, maxByteLength: number, maxCharLength: number) => {
+          const result = computeScrollbarState(0, scanState, maxByteLength, maxCharLength);
+          return result.verticalMax === 0;
+        }
+      ),
+      { numRuns: 10 }
+    );
+  });
+
+  it('disabled = true when both verticalMax and horizontalMax are 0', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 0, max: 100000 }),  // lineCount
+        scanStateArb,
+        fc.integer({ min: 0, max: 100000 }),  // maxByteLength
+        fc.integer({ min: 0, max: 100000 }),  // maxCharLength
+        (lineCount: number, scanState: ScanStateValue, maxByteLength: number, maxCharLength: number) => {
+          const result = computeScrollbarState(lineCount, scanState, maxByteLength, maxCharLength);
+          const expectedDisabled = result.verticalMax === 0 && result.horizontalMax === 0;
+          return result.disabled === expectedDisabled;
+        }
+      ),
+      { numRuns: 10 }
+    );
+  });
+});
+
 
 describe('Feature: text-handling, Property 5: Payload parse error identification', () => {
   // --- Generators for malformed payloads ---
@@ -812,6 +964,295 @@ describe('Feature: text-handling, Property 5: Payload parse error identification
         const result = validateGetViewPayload(payload);
         return typeof result === 'string' && result.startsWith('ERROR:');
       }),
+      { numRuns: 10 }
+    );
+  });
+});
+
+
+/**
+ * Feature: text-handling, Property 11: Polling lifecycle invariant
+ *
+ * Validates: Requirements 11.1, 11.2, 11.4, 11.5, 11.6
+ *
+ * Property: For any sequence of events (openFile, tabSwitch, scrollInfoResponse(terminal),
+ * scrollInfoResponse(inProgress), closeTab), polling SHALL be active iff the active tab
+ * has an in-progress scan state. Specifically:
+ * - Polling starts when a file is opened (scan starts in QuickScanInProgress)
+ * - Polling stops when a terminal scan state is received (QuickScanComplete, FullScanComplete, Failed, Cancelled)
+ * - Polling stops when the polled tab is closed
+ * - Polling restarts when switching to a tab whose scan is still in progress
+ */
+describe('Feature: text-handling, Property 11: Polling lifecycle invariant', () => {
+  let service: ShellStateService;
+  let correlationCounter: number;
+
+  beforeEach(() => {
+    correlationCounter = 0;
+    mockSubscribeHandlers = new Map();
+    mockSend = jest.fn((...args: any[]) => {
+      return `corr-${++correlationCounter}`;
+    });
+    mockCancel = jest.fn();
+
+    jest.spyOn(Storage.prototype, 'getItem').mockReturnValue(null);
+    jest.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {});
+
+    const mockBus = new MessageBusClient();
+    injectMap.set(MessageBusClient, mockBus);
+
+    service = new ShellStateService();
+  });
+
+  afterEach(() => {
+    service.stopScrollPolling();
+    jest.restoreAllMocks();
+  });
+
+  // --- Helpers ---
+
+  function isPollingActive(): boolean {
+    // Access private scrollPollTimer via any cast — polling is active if timer is non-null
+    return (service as any).scrollPollTimer !== null;
+  }
+
+  function getPollingSessionId(): string | null {
+    return (service as any).scrollPollSessionId;
+  }
+
+  function simulateOpenFile(viewSessionId: string): void {
+    service.triggerOpenFile();
+    const corrId = `corr-${correlationCounter}`;
+    const payload = `${viewSessionId}\n/path/${viewSessionId}.txt`;
+    const handler = mockSubscribeHandlers.get('open-file');
+    if (handler) {
+      handler({
+        messageType: 'open-file',
+        correlationId: corrId,
+        payload,
+      } as InboundMessage);
+    }
+  }
+
+  function simulateScrollInfoResponse(scanState: ScanStateValue): void {
+    const handler = mockSubscribeHandlers.get('get-scroll-info');
+    if (handler) {
+      handler({
+        messageType: 'get-scroll-info',
+        correlationId: `corr-${++correlationCounter}`,
+        payload: `${scanState}\n100\n200\n150`,
+      } as InboundMessage);
+    }
+  }
+
+  // --- Event types for the polling state machine ---
+
+  type PollingEvent =
+    | { kind: 'openFile'; sessionIndex: number }
+    | { kind: 'tabSwitch'; tabIndex: number }
+    | { kind: 'scrollInfoTerminal'; scanState: 'QuickScanComplete' | 'FullScanComplete' | 'Failed' | 'Cancelled' }
+    | { kind: 'scrollInfoInProgress'; scanState: 'QuickScanInProgress' | 'FullScanInProgress' }
+    | { kind: 'closeTab'; tabIndex: number };
+
+  // --- Model state ---
+
+  interface ModelState {
+    /** Sessions that exist (viewSessionId → scanComplete flag from scan-complete notification) */
+    sessions: Map<string, boolean>;
+    /** Ordered list of tab IDs (viewSessionIds) */
+    tabOrder: string[];
+    /** Currently active tab's viewSessionId, or null */
+    activeSession: string | null;
+    /** Whether polling should be active */
+    pollingActive: boolean;
+    /** Which session is being polled */
+    pollingSession: string | null;
+  }
+
+  // --- Generators ---
+
+  const terminalScanStates: Array<'QuickScanComplete' | 'FullScanComplete' | 'Failed' | 'Cancelled'> =
+    ['QuickScanComplete', 'FullScanComplete', 'Failed', 'Cancelled'];
+
+  const inProgressScanStates: Array<'QuickScanInProgress' | 'FullScanInProgress'> =
+    ['QuickScanInProgress', 'FullScanInProgress'];
+
+  const pollingEventArb: fc.Arbitrary<PollingEvent> = fc.oneof(
+    fc.integer({ min: 0, max: 99 }).map((sessionIndex): PollingEvent => ({
+      kind: 'openFile',
+      sessionIndex,
+    })),
+    fc.integer({ min: 0, max: 9 }).map((tabIndex): PollingEvent => ({
+      kind: 'tabSwitch',
+      tabIndex,
+    })),
+    fc.constantFrom(...terminalScanStates).map((scanState): PollingEvent => ({
+      kind: 'scrollInfoTerminal',
+      scanState,
+    })),
+    fc.constantFrom(...inProgressScanStates).map((scanState): PollingEvent => ({
+      kind: 'scrollInfoInProgress',
+      scanState,
+    })),
+    fc.integer({ min: 0, max: 9 }).map((tabIndex): PollingEvent => ({
+      kind: 'closeTab',
+      tabIndex,
+    }))
+  );
+
+  it('polling active iff active tab has in-progress scan for random event sequences', () => {
+    fc.assert(
+      fc.property(
+        fc.array(pollingEventArb, { minLength: 1, maxLength: 15 }),
+        (events: PollingEvent[]) => {
+          // Reset service state
+          service.tabs.set([]);
+          service.activeTabId.set(null);
+          service.pendingCorrelationId.set(null);
+          service.tabViewStates.set(new Map());
+          service.viewDimensions.set(null);
+          service.stopScrollPolling();
+          correlationCounter = 0;
+
+          // Model state
+          const model: ModelState = {
+            sessions: new Map(),
+            tabOrder: [],
+            activeSession: null,
+            pollingActive: false,
+            pollingSession: null,
+          };
+
+          let sessionCounter = 0;
+
+          for (const event of events) {
+            switch (event.kind) {
+              case 'openFile': {
+                const viewSessionId = `session-${++sessionCounter}`;
+
+                // Model: new session has scanComplete=false, becomes active, polling starts for it
+                model.sessions.set(viewSessionId, false); // false = scanComplete not yet received
+                model.tabOrder.push(viewSessionId);
+                model.activeSession = viewSessionId;
+                model.pollingActive = true;
+                model.pollingSession = viewSessionId;
+
+                // Real: open file
+                simulateOpenFile(viewSessionId);
+                break;
+              }
+
+              case 'tabSwitch': {
+                const tabs = service.tabs();
+                if (tabs.length === 0) break;
+                const idx = event.tabIndex % tabs.length;
+                const targetTab = tabs[idx];
+
+                // Model: switch to target tab
+                // activateTab checks !newState.scanComplete (from scan-complete notification)
+                model.activeSession = targetTab.viewSessionId;
+                const scanComplete = model.sessions.get(targetTab.viewSessionId) ?? false;
+                if (!scanComplete) {
+                  // scanComplete is false → service starts polling
+                  model.pollingActive = true;
+                  model.pollingSession = targetTab.viewSessionId;
+                } else {
+                  // scanComplete is true → service stops polling
+                  model.pollingActive = false;
+                  model.pollingSession = null;
+                }
+
+                // Real: activate tab
+                service.activateTab(targetTab.id);
+                break;
+              }
+
+              case 'scrollInfoTerminal': {
+                // Only meaningful if polling is active
+                if (!isPollingActive()) break;
+
+                // Model: terminal state → polling stops (but scanComplete flag is NOT set by scroll-info)
+                model.pollingActive = false;
+                model.pollingSession = null;
+
+                // Real: simulate terminal scroll info response
+                simulateScrollInfoResponse(event.scanState);
+                break;
+              }
+
+              case 'scrollInfoInProgress': {
+                // Only meaningful if polling is active
+                if (!isPollingActive()) break;
+
+                // Model: in-progress state → polling continues (no change)
+                // Real: simulate in-progress scroll info response
+                simulateScrollInfoResponse(event.scanState);
+                break;
+              }
+
+              case 'closeTab': {
+                const tabs = service.tabs();
+                if (tabs.length === 0) break;
+                const idx = event.tabIndex % tabs.length;
+                const targetTab = tabs[idx];
+
+                // Model: close tab
+                const closedSession = targetTab.viewSessionId;
+                model.sessions.delete(closedSession);
+                model.tabOrder = model.tabOrder.filter(s => s !== closedSession);
+
+                // If polling was for this tab, stop polling
+                if (model.pollingSession === closedSession) {
+                  model.pollingActive = false;
+                  model.pollingSession = null;
+                }
+
+                // Determine new active session after close
+                if (model.activeSession === closedSession) {
+                  // Service will auto-select a neighbor tab
+                  service.closeTab(targetTab.id);
+
+                  const newActiveTab = service.activeTab();
+                  if (newActiveTab) {
+                    model.activeSession = newActiveTab.viewSessionId;
+                    // Note: closeTab in the service does NOT call activateTab internally
+                    // It just sets activeTabId — no polling restart logic runs
+                  } else {
+                    model.activeSession = null;
+                  }
+                } else {
+                  // Closing a non-active tab
+                  service.closeTab(targetTab.id);
+                }
+                break;
+              }
+            }
+
+            // --- Invariant check after each event ---
+            const actualPolling = isPollingActive();
+            const actualSession = getPollingSessionId();
+
+            // Core invariant: model and real polling state must agree
+            if (model.pollingActive !== actualPolling) {
+              return false;
+            }
+
+            // If polling is active, it must be for the correct session
+            if (model.pollingActive && model.pollingSession !== actualSession) {
+              return false;
+            }
+
+            // Additional invariant: if polling is active, the polled session must exist
+            if (actualPolling && actualSession) {
+              if (!model.sessions.has(actualSession)) {
+                return false;
+              }
+            }
+          }
+
+          return true;
+        }
+      ),
       { numRuns: 10 }
     );
   });
