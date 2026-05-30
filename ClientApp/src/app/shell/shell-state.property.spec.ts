@@ -26,12 +26,17 @@ Object.defineProperty(globalThis, 'crypto', {
 // Mock MessageBusClient module to avoid bridge dependency
 let mockSend: jest.Mock = jest.fn();
 let mockSubscribeHandler: ((msg: any) => void) | null = null;
+let mockSubscribeHandlers: Map<string, (msg: any) => void> = new Map();
 
 jest.mock('../services/message-bus-client.service', () => ({
   MessageBusClient: class MockMessageBusClient {
     send = (...args: any[]) => mockSend(...args);
-    subscribe = (_messageType: string, handler: (msg: any) => void) => {
-      mockSubscribeHandler = handler;
+    configure = jest.fn();
+    subscribe = (messageType: string, handler: (msg: any) => void) => {
+      mockSubscribeHandlers.set(messageType, handler);
+      if (messageType === 'open-file') {
+        mockSubscribeHandler = handler;
+      }
       return { unsubscribe: jest.fn() };
     };
   },
@@ -97,6 +102,7 @@ describe('Feature: viewer-ui-shell, Property 7: Exactly one active tab when tabs
   beforeEach(() => {
     correlationCounter = 0;
     mockSubscribeHandler = null;
+    mockSubscribeHandlers = new Map();
     mockSend = jest.fn(() => `corr-${++correlationCounter}`);
 
     // Mock localStorage
@@ -227,6 +233,7 @@ const tabArb = filePathArb.map((fp) => ({
   id: crypto.randomUUID(),
   filePath: fp,
   fileName: fp.substring(Math.max(fp.lastIndexOf('/'), fp.lastIndexOf('\\')) + 1),
+  viewSessionId: crypto.randomUUID(),
 }));
 
 /** Generator for a random tab state: 0-5 tabs with a valid activeTabId */
@@ -247,6 +254,7 @@ describe('Feature: viewer-ui-shell, Property 4: Empty response preserves tab sta
   beforeEach(() => {
     correlationCounter = 0;
     mockSubscribeHandler = null;
+    mockSubscribeHandlers = new Map();
     mockSend = jest.fn(() => `corr-${++correlationCounter}`);
 
     // Mock localStorage
@@ -325,6 +333,7 @@ describe('Feature: viewer-ui-shell, Property 6: Active file path reflects active
 
   beforeEach(() => {
     mockSubscribeHandler = null;
+    mockSubscribeHandlers = new Map();
     mockSend = jest.fn(() => 'corr-1');
 
     jest.spyOn(Storage.prototype, 'getItem').mockReturnValue(null);
@@ -402,6 +411,7 @@ describe('Feature: viewer-ui-shell, Property 8: Position change preserves tab st
   beforeEach(() => {
     correlationCounter = 0;
     mockSubscribeHandler = null;
+    mockSubscribeHandlers = new Map();
     mockSend = jest.fn(() => `corr-${++correlationCounter}`);
 
     // Mock localStorage
@@ -424,6 +434,7 @@ describe('Feature: viewer-ui-shell, Property 8: Position change preserves tab st
     id: crypto.randomUUID(),
     filePath: fp,
     fileName: fp.substring(Math.max(fp.lastIndexOf('/'), fp.lastIndexOf('\\')) + 1),
+    viewSessionId: crypto.randomUUID(),
   }));
 
   // Generator for a random tab state: array of tabs + activeTabId from one of them (or null if empty)
@@ -507,6 +518,7 @@ describe('Feature: viewer-ui-shell, Property 5: Close tab removes it and selects
   beforeEach(() => {
     correlationCounter = 0;
     mockSubscribeHandler = null;
+    mockSubscribeHandlers = new Map();
     mockSend = jest.fn(() => `corr-${++correlationCounter}`);
 
     // Mock localStorage
@@ -532,6 +544,7 @@ describe('Feature: viewer-ui-shell, Property 5: Close tab removes it and selects
           id: `tab-${i}`,
           filePath: `/path/to/file-${i}.txt`,
           fileName: `file-${i}.txt`,
+          viewSessionId: `session-${i}`,
         })
       )
     )
@@ -636,7 +649,7 @@ describe('Feature: viewer-ui-shell, Property 5: Close tab removes it and selects
   it('closing the last remaining tab sets activeTabId to null', () => {
     fc.assert(
       fc.property(
-        fc.constant({ id: 'tab-0', filePath: '/path/to/file.txt', fileName: 'file.txt' }),
+        fc.constant({ id: 'tab-0', filePath: '/path/to/file.txt', fileName: 'file.txt', viewSessionId: 'session-0' }),
         (tab) => {
           service.tabs.set([tab]);
           service.activeTabId.set(tab.id);
@@ -671,6 +684,7 @@ describe('Feature: viewer-ui-shell, Property 3: Opening a file creates a tab and
   beforeEach(() => {
     correlationCounter = 0;
     mockSubscribeHandler = null;
+    mockSubscribeHandlers = new Map();
     mockSend = jest.fn(() => `corr-${++correlationCounter}`);
 
     // Mock localStorage

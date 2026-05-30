@@ -74,6 +74,8 @@ describe('Feature: message-bus-service, Property 3: Correlation_ID uniqueness', 
    * **Validates: Requirements 1.3, 2.1, 2.2**
    */
   it('all returned Correlation_IDs are distinct for N send() calls', () => {
+    jest.spyOn(console, 'warn').mockImplementation();
+
     fc.assert(
       fc.property(
         fc.integer({ min: 2, max: 500 }),
@@ -90,6 +92,8 @@ describe('Feature: message-bus-service, Property 3: Correlation_ID uniqueness', 
       ),
       { numRuns: 100 }
     );
+
+    (console.warn as jest.Mock).mockRestore();
   });
 });
 

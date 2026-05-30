@@ -22,13 +22,19 @@ Object.defineProperty(globalThis, 'crypto', {
 // Mock MessageBusClient module to avoid bridge dependency
 let mockSend: jest.Mock = jest.fn();
 let mockSubscribeHandler: ((msg: any) => void) | null = null;
+let mockSubscribeHandlers: Map<string, (msg: any) => void> = new Map();
 let mockUnsubscribe: jest.Mock = jest.fn();
 
 jest.mock('../services/message-bus-client.service', () => ({
   MessageBusClient: class MockMessageBusClient {
     send = (...args: any[]) => mockSend(...args);
-    subscribe = (_messageType: string, handler: (msg: any) => void) => {
-      mockSubscribeHandler = handler;
+    configure = jest.fn();
+    subscribe = (messageType: string, handler: (msg: any) => void) => {
+      mockSubscribeHandlers.set(messageType, handler);
+      // Keep backward compat: mockSubscribeHandler points to 'open-file' handler
+      if (messageType === 'open-file') {
+        mockSubscribeHandler = handler;
+      }
       return { unsubscribe: mockUnsubscribe };
     };
   },
@@ -75,6 +81,7 @@ describe('ShellStateService', () => {
     uuidCounter = 0;
     correlationCounter = 0;
     mockSubscribeHandler = null;
+    mockSubscribeHandlers = new Map();
     mockUnsubscribe = jest.fn();
     mockSend = jest.fn(() => `corr-${++correlationCounter}`);
 
@@ -141,9 +148,9 @@ describe('ShellStateService', () => {
   // --- triggerOpenFile ---
 
   describe('triggerOpenFile', () => {
-    it('calls messageBus.send("open-file")', () => {
+    it('calls messageBus.send("open-file") with viewport dimensions payload', () => {
       service.triggerOpenFile();
-      expect(mockSend).toHaveBeenCalledWith('open-file');
+      expect(mockSend).toHaveBeenCalledWith('open-file', '40\n120');
     });
 
     it('sets pendingCorrelationId after send', () => {
