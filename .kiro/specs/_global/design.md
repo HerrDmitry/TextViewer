@@ -5,6 +5,7 @@
 #[[file:.kiro/specs/_global/design-file-view-service.md]]
 #[[file:.kiro/specs/_global/design-viewer-ui-shell.md]]
 #[[file:.kiro/specs/_global/design-text-handling.md]]
+#[[file:.kiro/specs/_global/design-scroll-navigation.md]]
 
 ## Overview
 
@@ -14,6 +15,7 @@ This document captures the full product design for all shipped features. Archite
 - Viewer UI Shell → `design-viewer-ui-shell.md`
 - Message Bus → `design-bus-service.md`
 - Text Handling → `design-text-handling.md`
+- Scroll Navigation → `design-scroll-navigation.md`
 
 ## Architecture
 
@@ -211,6 +213,7 @@ Properties defined per feature in their respective design docs:
 - **File Index**: 7 properties (byte-length round-trip, char-length, tier minimality, boundary optimality, lookup, state machine, concurrency) — see `design-file-index.md`
 - **File View Service**: 6 properties (row extraction, result count, param validation, replacement chars, column counting, immutability) — see `design-file-view-service.md`
 - **Text Handling**: 12 properties (dimension computation, view request orchestration, payload round-trips, response encoding, session lifecycle, scrollbar invariants, polling lifecycle) — see `design-text-handling.md`
+- **Scroll Navigation**: 5 properties (scroll step clamping, drag position clamping, non-interactive guard, thumb position fraction, thumb size ratio) — see `design-scroll-navigation.md`
 
 ## Testing Strategy
 
