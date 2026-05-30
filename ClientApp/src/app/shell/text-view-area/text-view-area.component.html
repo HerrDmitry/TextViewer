@@ -1,5 +1,13 @@
-<div class="text-view-area">
+<div class="text-view-area" #contentArea>
   @if (!hasOpenTabs()) {
     <div class="empty-state">Ctrl-O to open a file</div>
+  } @else if (viewError()) {
+    <div class="view-error">{{ viewError() }}</div>
+  } @else if (viewRows()) {
+    <div class="view-content">
+      @for (row of viewRows(); track $index) {
+        <div class="view-row">{{ row }}</div>
+      }
+    </div>
   }
 </div>

@@ -6,16 +6,6 @@
   overflow: hidden;
 }
 
-.file-content {
-  flex: 1;
-  margin: 0;
-  padding: 8px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-wrap: break-word;
-  font-family: monospace;
-}
-
 .empty-state {
   flex: 1;
   display: flex;
@@ -23,4 +13,22 @@
   justify-content: center;
   color: #888;
   font-size: 1.2rem;
+}
+
+.view-content {
+  flex: 1;
+  overflow: hidden;
+}
+
+.view-row {
+  font-family: monospace;
+  font-size: 14px;
+  white-space: pre;
+  line-height: normal;
+}
+
+.view-error {
+  padding: 16px;
+  color: #e53935;
+  font-size: 14px;
 }
