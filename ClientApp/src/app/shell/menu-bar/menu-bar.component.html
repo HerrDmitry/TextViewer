@@ -1,0 +1,9 @@
+<nav class="menu-bar" (document:keydown.escape)="closeMenu()" (document:click)="closeMenu()">
+  <div class="menu-item" (click)="toggleMenu(); $event.stopPropagation()">
+    <span class="menu-label">File</span>
+    <ul class="dropdown" [style.display]="menuOpen() ? 'block' : 'none'" (click)="$event.stopPropagation()">
+      <li [class.disabled]="isOpenDisabled()" (click)="!isOpenDisabled() && onOpen()">Open...</li>
+      <li (click)="onExit()">Exit</li>
+    </ul>
+  </div>
+</nav>
