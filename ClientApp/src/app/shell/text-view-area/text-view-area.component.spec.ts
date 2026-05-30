@@ -1,7 +1,7 @@
 /**
  * Unit tests for TextViewAreaComponent measurement and rendering
  *
- * Validates: Requirements 1.1, 1.2, 1.5, 1.6, 1.7, 5.1, 5.2, 5.3, 5.4, 5.5, 5.6
+ * Validates: Requirements 1.1, 1.2, 1.5, 1.6, 1.7, 3.5, 4.7, 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 6.5
  */
 
 // Polyfill crypto.randomUUID for jsdom
@@ -53,7 +53,18 @@ jest.mock('../shell-state.service', () => ({
     activeViewRows = () => mockActiveViewRows;
     activeViewError = () => mockActiveViewError;
     isViewPending = () => mockIsViewPending;
+    activeScrollbarState = () => null;
+    verticalThumbRatio = () => 1;
+    verticalThumbFraction = () => 0;
+    horizontalThumbRatio = () => 1;
+    horizontalThumbFraction = () => 0;
     updateViewDimensions = mockUpdateViewDimensions;
+    handleWheel = jest.fn();
+    handleArrowKey = jest.fn();
+    handleVerticalDragStart = jest.fn();
+    handleHorizontalDragStart = jest.fn();
+    handleDragMove = jest.fn();
+    handleDragEnd = jest.fn();
   },
 }));
 
@@ -84,6 +95,7 @@ jest.mock('@angular/core', () => {
     AfterViewInit: class {},
     OnDestroy: class {},
     ElementRef: class {},
+    ViewChild: () => () => {},
     signal,
     computed,
     inject,
@@ -345,6 +357,193 @@ describe('TextViewAreaComponent', () => {
       // Advancing time should not trigger measurement
       jest.advanceTimersByTime(200);
       expect(mockUpdateViewDimensions).not.toHaveBeenCalled();
+    });
+  });
+
+  // --- Wheel preventDefault called (Req 3.5) ---
+
+  describe('Wheel event handling', () => {
+    it('calls preventDefault on wheel event to suppress native scrolling', () => {
+      const wheelEvent = new WheelEvent('wheel', { deltaY: 100, deltaX: 0 });
+      const preventDefaultSpy = jest.spyOn(wheelEvent, 'preventDefault');
+
+      component.onWheel(wheelEvent);
+
+      expect(preventDefaultSpy).toHaveBeenCalled();
+    });
+
+    it('forwards deltaY and deltaX to state.handleWheel', () => {
+      const mockService = injectMap.get(ShellStateService);
+      const wheelEvent = new WheelEvent('wheel', { deltaY: -50, deltaX: 30 });
+
+      component.onWheel(wheelEvent);
+
+      expect(mockService.handleWheel).toHaveBeenCalledWith(-50, 30);
+    });
+  });
+
+  // --- Arrow key preventDefault when active tab exists (Req 4.7) ---
+
+  describe('Arrow key event handling', () => {
+    it('calls preventDefault on arrow key when active tab exists', () => {
+      mockActiveTab = { id: 'tab-1', viewSessionId: 'session-1', filePath: '/file.txt', fileName: 'file.txt' };
+      const keyEvent = new KeyboardEvent('keydown', { key: 'ArrowDown' });
+      const preventDefaultSpy = jest.spyOn(keyEvent, 'preventDefault');
+
+      component.onKeydown(keyEvent);
+
+      expect(preventDefaultSpy).toHaveBeenCalled();
+    });
+
+    it('does NOT call preventDefault when no active tab exists', () => {
+      mockActiveTab = null;
+      const keyEvent = new KeyboardEvent('keydown', { key: 'ArrowDown' });
+      const preventDefaultSpy = jest.spyOn(keyEvent, 'preventDefault');
+
+      component.onKeydown(keyEvent);
+
+      expect(preventDefaultSpy).not.toHaveBeenCalled();
+    });
+
+    it('does NOT call preventDefault for non-arrow keys', () => {
+      mockActiveTab = { id: 'tab-1', viewSessionId: 'session-1', filePath: '/file.txt', fileName: 'file.txt' };
+      const keyEvent = new KeyboardEvent('keydown', { key: 'Enter' });
+      const preventDefaultSpy = jest.spyOn(keyEvent, 'preventDefault');
+
+      component.onKeydown(keyEvent);
+
+      expect(preventDefaultSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  // --- user-select: none applied during drag, removed after (Req 1.6, 2.6) ---
+
+  describe('user-select during drag', () => {
+    let mockVerticalTrack: HTMLElement;
+    let mockHorizontalTrack: HTMLElement;
+
+    beforeEach(() => {
+      // Set up mock track elements with clientHeight/clientWidth
+      mockVerticalTrack = document.createElement('div');
+      Object.defineProperty(mockVerticalTrack, 'clientHeight', { value: 400, configurable: true });
+      mockHorizontalTrack = document.createElement('div');
+      Object.defineProperty(mockHorizontalTrack, 'clientWidth', { value: 600, configurable: true });
+
+      // Assign ViewChild references directly on the component
+      (component as any).verticalTrack = { nativeElement: mockVerticalTrack };
+      (component as any).horizontalTrack = { nativeElement: mockHorizontalTrack };
+    });
+
+    it('applies user-select: none on vertical thumb mousedown', () => {
+      document.body.style.userSelect = '';
+      const mouseEvent = new MouseEvent('mousedown', { clientY: 100 });
+
+      component.onVerticalThumbMousedown(mouseEvent);
+
+      expect(document.body.style.userSelect).toBe('none');
+    });
+
+    it('removes user-select: none on mouseup after vertical drag', () => {
+      document.body.style.userSelect = '';
+      const mousedownEvent = new MouseEvent('mousedown', { clientY: 100 });
+
+      component.onVerticalThumbMousedown(mousedownEvent);
+      expect(document.body.style.userSelect).toBe('none');
+
+      // Simulate mouseup on document
+      const mouseupEvent = new MouseEvent('mouseup');
+      document.dispatchEvent(mouseupEvent);
+
+      expect(document.body.style.userSelect).toBe('');
+    });
+
+    it('applies user-select: none on horizontal thumb mousedown', () => {
+      document.body.style.userSelect = '';
+      const mouseEvent = new MouseEvent('mousedown', { clientX: 100 });
+
+      component.onHorizontalThumbMousedown(mouseEvent);
+
+      expect(document.body.style.userSelect).toBe('none');
+    });
+
+    it('removes user-select: none on mouseup after horizontal drag', () => {
+      document.body.style.userSelect = '';
+      const mousedownEvent = new MouseEvent('mousedown', { clientX: 100 });
+
+      component.onHorizontalThumbMousedown(mousedownEvent);
+      expect(document.body.style.userSelect).toBe('none');
+
+      // Simulate mouseup on document
+      const mouseupEvent = new MouseEvent('mouseup');
+      document.dispatchEvent(mouseupEvent);
+
+      expect(document.body.style.userSelect).toBe('');
+    });
+  });
+
+  // --- Thumb size applied as inline style (Req 6.5) ---
+
+  describe('Thumb size computation for inline style', () => {
+    let mockVerticalTrack: HTMLElement;
+    let mockHorizontalTrack: HTMLElement;
+
+    beforeEach(() => {
+      mockVerticalTrack = document.createElement('div');
+      Object.defineProperty(mockVerticalTrack, 'clientHeight', { value: 400, configurable: true });
+      mockHorizontalTrack = document.createElement('div');
+      Object.defineProperty(mockHorizontalTrack, 'clientWidth', { value: 600, configurable: true });
+
+      (component as any).verticalTrack = { nativeElement: mockVerticalTrack };
+      (component as any).horizontalTrack = { nativeElement: mockHorizontalTrack };
+    });
+
+    it('computeVerticalThumbPx returns ratio * trackHeight', () => {
+      // verticalThumbRatio returns 1 by default (mock), so thumb = full track
+      const result = component.computeVerticalThumbPx();
+      // ratio=1, track=400 → max(20, 1*400) = 400
+      expect(result).toBe(400);
+    });
+
+    it('computeVerticalThumbPx enforces 20px minimum', () => {
+      // Override the mock to return a very small ratio
+      const mockService = injectMap.get(ShellStateService);
+      mockService.verticalThumbRatio = () => 0.01; // 0.01 * 400 = 4 → clamped to 20
+
+      // Re-create component to pick up new mock
+      component = new TextViewAreaComponent();
+      (component as any).verticalTrack = { nativeElement: mockVerticalTrack };
+
+      const result = component.computeVerticalThumbPx();
+      expect(result).toBe(20);
+    });
+
+    it('computeHorizontalThumbPx returns ratio * trackWidth', () => {
+      const result = component.computeHorizontalThumbPx();
+      // ratio=1, track=600 → max(20, 1*600) = 600
+      expect(result).toBe(600);
+    });
+
+    it('computeHorizontalThumbPx enforces 20px minimum', () => {
+      const mockService = injectMap.get(ShellStateService);
+      mockService.horizontalThumbRatio = () => 0.02; // 0.02 * 600 = 12 → clamped to 20
+
+      component = new TextViewAreaComponent();
+      (component as any).horizontalTrack = { nativeElement: mockHorizontalTrack };
+
+      const result = component.computeHorizontalThumbPx();
+      expect(result).toBe(20);
+    });
+
+    it('computeVerticalThumbPx returns 20 when track ref is not available', () => {
+      (component as any).verticalTrack = undefined;
+      const result = component.computeVerticalThumbPx();
+      expect(result).toBe(20);
+    });
+
+    it('computeHorizontalThumbPx returns 20 when track ref is not available', () => {
+      (component as any).horizontalTrack = undefined;
+      const result = component.computeHorizontalThumbPx();
+      expect(result).toBe(20);
     });
   });
 });

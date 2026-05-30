@@ -2,7 +2,19 @@ import { computed, Injectable, inject, OnDestroy, signal } from '@angular/core';
 import { MessageBusClient } from '../services/message-bus-client.service';
 import { InboundMessage, SubscriptionHandle } from '../services/message-bus.types';
 import { extractFileName } from './extract-file-name';
-import { Tab, TabPosition, TabViewState, ScrollbarState, ScanStateValue, ViewDimensions } from './shell.types';
+import { Tab, TabPosition, TabViewState, ScrollbarState, ScanStateValue, ViewDimensions, DragState } from './shell.types';
+
+/** Number of lines/columns to scroll per mouse wheel tick */
+export const WHEEL_STEP = 3;
+/** Number of lines/columns to scroll per arrow key press */
+export const ARROW_STEP = 1;
+/** Minimum thumb size in pixels */
+export const MIN_THUMB_SIZE = 20;
+
+/** Clamp a value between min and max (inclusive) */
+export function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
 
 /**
  * Compute horizontal scrollbar max based on scan state.
@@ -44,6 +56,7 @@ export class ShellStateService implements OnDestroy {
   readonly errorMessage = signal<string | null>(null);
   readonly tabViewStates = signal<Map<string, TabViewState>>(new Map());
   readonly viewDimensions = signal<ViewDimensions | null>(null);
+  readonly dragState = signal<DragState | null>(null);
 
   // --- Computed signals ---
   readonly activeTab = computed(() => {
@@ -76,6 +89,48 @@ export class ShellStateService implements OnDestroy {
     if (!tab) return null;
     const state = this.tabViewStates().get(tab.viewSessionId);
     return state?.scrollbarState ?? null;
+  });
+
+  readonly verticalThumbRatio = computed(() => {
+    const sb = this.activeScrollbarState();
+    const dims = this.viewDimensions();
+    if (!sb || sb.disabled || !dims) return 1;
+    if (sb.verticalMax <= dims.rowCount) return 1;
+    return dims.rowCount / sb.verticalMax;
+  });
+
+  readonly horizontalThumbRatio = computed(() => {
+    const sb = this.activeScrollbarState();
+    const dims = this.viewDimensions();
+    if (!sb || sb.disabled || !dims) return 1;
+    if (sb.horizontalMax <= dims.colCount) return 1;
+    return dims.colCount / sb.horizontalMax;
+  });
+
+  readonly verticalThumbFraction = computed(() => {
+    const tab = this.activeTab();
+    if (!tab) return 0;
+    const state = this.tabViewStates().get(tab.viewSessionId);
+    if (!state) return 0;
+    const sb = state.scrollbarState;
+    const dims = this.viewDimensions();
+    if (!dims || sb.disabled || sb.verticalMax <= dims.rowCount) return 0;
+    const maxScroll = sb.verticalMax - dims.rowCount;
+    if (maxScroll <= 0) return 0;
+    return state.startLine / maxScroll;
+  });
+
+  readonly horizontalThumbFraction = computed(() => {
+    const tab = this.activeTab();
+    if (!tab) return 0;
+    const state = this.tabViewStates().get(tab.viewSessionId);
+    if (!state) return 0;
+    const sb = state.scrollbarState;
+    const dims = this.viewDimensions();
+    if (!dims || sb.disabled || sb.horizontalMax <= dims.colCount) return 0;
+    const maxScroll = sb.horizontalMax - dims.colCount;
+    if (maxScroll <= 0) return 0;
+    return state.startCol / maxScroll;
   });
 
   // --- Dependencies ---
@@ -150,6 +205,8 @@ export class ShellStateService implements OnDestroy {
         pendingCorrelationId: null,
         deferred: false,
         scrollbarState: { verticalMax: 0, horizontalMax: 0, disabled: true },
+        startLine: 0,
+        startCol: 0,
       });
       this.tabViewStates.set(updatedStates);
 
@@ -235,7 +292,13 @@ export class ShellStateService implements OnDestroy {
       this.stopScrollPolling();
     }
 
-    this.tryTriggerViewRequest();
+    // Only trigger a view request if the new tab does NOT already have cached rows.
+    // Tabs with cached viewRows already display correct content (Req 5.5, 7.5);
+    // thumb position restores automatically via computed signals reading startLine/startCol.
+    const newState2 = newTab ? this.tabViewStates().get(newTab.viewSessionId) : null;
+    if (!newState2?.viewRows) {
+      this.tryTriggerViewRequest();
+    }
   }
 
   closeTab(tabId: string): void {
@@ -326,14 +389,19 @@ export class ShellStateService implements OnDestroy {
         pendingCorrelationId: null,
         deferred: false,
         scrollbarState: { verticalMax: 0, horizontalMax: 0, disabled: true },
+        startLine: 0,
+        startCol: 0,
       });
       this.tabViewStates.set(updated);
     }
 
-    // Perform one final get-scroll-info poll, then stop polling
+    // Perform one final get-scroll-info poll.
+    // Do NOT stop polling here — let handleScrollInfoResponse stop it
+    // when it sees the terminal scan state. Stopping here causes a race:
+    // scrollPollSessionId becomes null before the response arrives,
+    // so handleScrollInfoResponse discards it and scrollbar stays disabled.
     if (this.scrollPollSessionId === viewSessionId) {
       this.messageBus.send('get-scroll-info', viewSessionId);
-      this.stopScrollPolling();
     }
 
     this.tryTriggerViewRequest();
@@ -360,11 +428,10 @@ export class ShellStateService implements OnDestroy {
     const updated = new Map(states);
 
     if (msg.payload.startsWith(ShellStateService.ERROR_PREFIX)) {
-      // Error response: store in errorMessage, clear viewRows
+      // Error response: store error, keep previous viewRows visible (Req 8.4)
       updated.set(matchedSessionId, {
         ...currentState,
         errorMessage: msg.payload,
-        viewRows: null,
         pendingCorrelationId: null,
       });
     } else {
@@ -492,6 +559,188 @@ export class ShellStateService implements OnDestroy {
 
     const updated = new Map(currentStates);
     updated.set(sessionId, { ...existing, scrollbarState });
+    this.tabViewStates.set(updated);
+  }
+
+  // --- Scroll action methods ---
+
+  handleArrowKey(direction: 'up' | 'down' | 'left' | 'right'): void {
+    const tab = this.activeTab();
+    if (!tab) return;
+    const state = this.tabViewStates().get(tab.viewSessionId);
+    if (!state) return;
+    const sb = state.scrollbarState;
+    const dims = this.viewDimensions();
+    if (!dims || sb.disabled) return;
+
+    let newStartLine = state.startLine;
+    let newStartCol = state.startCol;
+
+    switch (direction) {
+      case 'down':
+        if (sb.verticalMax > dims.rowCount)
+          newStartLine = clamp(state.startLine + 1, 0, sb.verticalMax - dims.rowCount);
+        break;
+      case 'up':
+        if (sb.verticalMax > dims.rowCount)
+          newStartLine = clamp(state.startLine - 1, 0, sb.verticalMax - dims.rowCount);
+        break;
+      case 'right':
+        if (sb.horizontalMax > dims.colCount)
+          newStartCol = clamp(state.startCol + 1, 0, sb.horizontalMax - dims.colCount);
+        break;
+      case 'left':
+        if (sb.horizontalMax > dims.colCount)
+          newStartCol = clamp(state.startCol - 1, 0, sb.horizontalMax - dims.colCount);
+        break;
+    }
+
+    if (newStartLine === state.startLine && newStartCol === state.startCol) return;
+
+    this.updateScrollPosition(tab.viewSessionId, newStartLine, newStartCol);
+    this.sendScrollViewRequest(tab.viewSessionId, newStartLine, newStartCol);
+  }
+
+  handleWheel(deltaY: number, deltaX: number): void {
+    const tab = this.activeTab();
+    if (!tab) return;
+    const state = this.tabViewStates().get(tab.viewSessionId);
+    if (!state) return;
+    const sb = state.scrollbarState;
+    const dims = this.viewDimensions();
+    if (!dims || sb.disabled) return;
+
+    let newStartLine = state.startLine;
+    let newStartCol = state.startCol;
+
+    if (deltaY !== 0 && sb.verticalMax > dims.rowCount) {
+      const maxScroll = sb.verticalMax - dims.rowCount;
+      newStartLine = clamp(state.startLine + Math.sign(deltaY) * WHEEL_STEP, 0, maxScroll);
+    }
+    if (deltaX !== 0 && sb.horizontalMax > dims.colCount) {
+      const maxScroll = sb.horizontalMax - dims.colCount;
+      newStartCol = clamp(state.startCol + Math.sign(deltaX) * WHEEL_STEP, 0, maxScroll);
+    }
+
+    if (newStartLine === state.startLine && newStartCol === state.startCol) return;
+
+    this.updateScrollPosition(tab.viewSessionId, newStartLine, newStartCol);
+    this.sendScrollViewRequest(tab.viewSessionId, newStartLine, newStartCol);
+  }
+
+  // --- Drag action methods ---
+
+  handleVerticalDragStart(mouseY: number, trackLength: number): void {
+    if (trackLength <= 0) return;
+    const tab = this.activeTab();
+    if (!tab) return;
+    const state = this.tabViewStates().get(tab.viewSessionId);
+    if (!state) return;
+    const sb = state.scrollbarState;
+    const dims = this.viewDimensions();
+    if (!dims || sb.verticalMax <= dims.rowCount) return;
+
+    this.dragState.set({
+      axis: 'vertical',
+      startMousePos: mouseY,
+      startScrollPos: state.startLine,
+      trackLength,
+      scrollbarMax: sb.verticalMax,
+      viewportSize: dims.rowCount,
+    });
+  }
+
+  handleHorizontalDragStart(mouseX: number, trackLength: number): void {
+    if (trackLength <= 0) return;
+    const tab = this.activeTab();
+    if (!tab) return;
+    const state = this.tabViewStates().get(tab.viewSessionId);
+    if (!state) return;
+    const sb = state.scrollbarState;
+    const dims = this.viewDimensions();
+    if (!dims || sb.horizontalMax <= dims.colCount) return;
+
+    this.dragState.set({
+      axis: 'horizontal',
+      startMousePos: mouseX,
+      startScrollPos: state.startCol,
+      trackLength,
+      scrollbarMax: sb.horizontalMax,
+      viewportSize: dims.colCount,
+    });
+  }
+
+  handleDragMove(mousePos: number): void {
+    const drag = this.dragState();
+    if (!drag) return;
+    const tab = this.activeTab();
+    if (!tab) return;
+
+    const delta = mousePos - drag.startMousePos;
+    const maxScroll = drag.scrollbarMax - drag.viewportSize;
+    const scrollDelta = Math.round((delta / drag.trackLength) * maxScroll);
+    const newPos = clamp(drag.startScrollPos + scrollDelta, 0, maxScroll);
+
+    if (drag.axis === 'vertical') {
+      this.updateScrollPosition(tab.viewSessionId, newPos, undefined);
+    } else {
+      this.updateScrollPosition(tab.viewSessionId, undefined, newPos);
+    }
+  }
+
+  handleDragEnd(): void {
+    const drag = this.dragState();
+    if (!drag) return;
+    this.dragState.set(null);
+
+    const tab = this.activeTab();
+    if (!tab) return;
+    const state = this.tabViewStates().get(tab.viewSessionId);
+    if (!state) return;
+
+    this.sendScrollViewRequest(tab.viewSessionId, state.startLine, state.startCol);
+  }
+
+  // --- Private: scroll position update ---
+
+  private updateScrollPosition(sessionId: string, startLine?: number, startCol?: number): void {
+    const states = this.tabViewStates();
+    const existing = states.get(sessionId);
+    if (!existing) return;
+    const updated = new Map(states);
+    updated.set(sessionId, {
+      ...existing,
+      startLine: startLine ?? existing.startLine,
+      startCol: startCol ?? existing.startCol,
+    });
+    this.tabViewStates.set(updated);
+  }
+
+  // --- Private: scroll view request with latest-wins cancellation ---
+
+  private sendScrollViewRequest(sessionId: string, startLine: number, startCol: number): void {
+    const states = this.tabViewStates();
+    const existing = states.get(sessionId);
+    if (!existing) return;
+
+    // Latest-wins: cancel pending request if exists
+    if (existing.pendingCorrelationId) {
+      this.messageBus.cancel(existing.pendingCorrelationId);
+    }
+
+    const dims = this.viewDimensions();
+    if (!dims) return;
+
+    const payload = `${sessionId}\n${startLine}\n${startCol}\n${dims.rowCount}\n${dims.colCount}`;
+    const correlationId = this.messageBus.send('get-view', payload);
+
+    const updated = new Map(this.tabViewStates());
+    updated.set(sessionId, {
+      ...existing,
+      startLine,
+      startCol,
+      pendingCorrelationId: correlationId,
+    });
     this.tabViewStates.set(updated);
   }
 

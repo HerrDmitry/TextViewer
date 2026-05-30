@@ -27,6 +27,26 @@ export interface TabViewState {
   deferred: boolean;
   /** Current scrollbar max values for this tab */
   scrollbarState: ScrollbarState;
+  /** Zero-based index of the first visible line (vertical scroll position) */
+  startLine: number;
+  /** Zero-based index of the first visible column (horizontal scroll position) */
+  startCol: number;
+}
+
+/** Transient state during scrollbar thumb drag */
+export interface DragState {
+  /** Which axis is being dragged */
+  axis: 'vertical' | 'horizontal';
+  /** Mouse coordinate at drag start (clientY for vertical, clientX for horizontal) */
+  startMousePos: number;
+  /** startLine or startCol value at drag start */
+  startScrollPos: number;
+  /** Track length in pixels (track element size minus thumb size) */
+  trackLength: number;
+  /** Scrollbar max value at drag start */
+  scrollbarMax: number;
+  /** Viewport size (rowCount or colCount) at drag start */
+  viewportSize: number;
 }
 
 /** Computed viewport dimensions in character units */
