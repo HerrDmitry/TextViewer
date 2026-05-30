@@ -3,10 +3,15 @@
 #[[file:.kiro/specs/_global/design-shared.md]]
 #[[file:.kiro/specs/_global/design-file-index.md]]
 #[[file:.kiro/specs/_global/design-file-view-service.md]]
+#[[file:.kiro/specs/_global/design-viewer-ui-shell.md]]
 
 ## Overview
 
-This document captures the full product design for all shipped features. Architecture, build pipeline, communication model, and error handling patterns are provided by design-shared.md. File Index internals in `design-file-index.md`. File View Service in `design-file-view-service.md`. This document covers feature-specific component interfaces, state, correctness properties, and testing.
+This document captures the full product design for all shipped features. Architecture, build pipeline, communication model, and error handling patterns provided by design-shared.md. Feature-specific designs in separate docs (referenced above):
+- File Index internals → `design-file-index.md`
+- File View Service → `design-file-view-service.md`
+- Viewer UI Shell → `design-viewer-ui-shell.md`
+- Message Bus → `design-bus-service.md`
 
 ## Architecture
 
@@ -16,7 +21,7 @@ graph TD
     B --> C[Blazor Host]
     C --> D[Photino Window]
     D --> E[WebView]
-    E --> F[Angular App]
+    E --> F[Angular App — UI Shell]
     A --> G[MessageBusHost]
     G --> H[open-file handler]
     H --> I[FileViewService]
@@ -34,7 +39,7 @@ graph TD
     end
 ```
 
-See `design-shared.md` for layer details. See `design-file-index.md` for FileIndex internals. See `design-file-view-service.md` for view extraction.
+See `design-shared.md` for layer details. See feature design docs for internals.
 
 ## Components and Interfaces
 
@@ -47,7 +52,7 @@ Entry point — configures and launches Photino.Blazor app, sets up Message Bus.
 - Register Blazor root component
 - Configure Photino window properties (title, size, resizability)
 - Instantiate `PhotinoMessageBridge` + `MessageBusHost`
-- Register message handlers (e.g. "open-file") on the bus
+- Register message handlers (e.g. "open-file", "exit") on the bus
 - Start application event loop
 
 **Interface:**
@@ -59,7 +64,6 @@ app.MainWindow
     .SetUseOsDefaultSize(true)
     .SetResizable(true);
 
-// Message Bus setup
 var bridge = new PhotinoMessageBridge(app.MainWindow);
 var messageBus = new MessageBusHost(bridge);
 
@@ -68,6 +72,12 @@ messageBus.RegisterHandler("open-file", async (correlationId, payload) =>
     var files = app.MainWindow.ShowOpenFile("Open File", "", false, null);
     if (files != null && files.Length > 0 && !string.IsNullOrEmpty(files[0]))
         return files[0];
+    return "";
+});
+
+messageBus.RegisterHandler("exit", async (correlationId, payload) =>
+{
+    app.MainWindow.Close();
     return "";
 });
 
@@ -96,29 +106,16 @@ Minimal Blazor component — mounting point for Angular app.
 </html>
 ```
 
-### 3. Angular `AppComponent`
+### 3. Angular UI Shell
 
-```typescript
-@Component({ standalone: true, selector: 'app-root' })
-export class AppComponent implements OnDestroy {
-  displayText = signal('Hello World');
+Full component hierarchy, state management, templates, and CSS in `design-viewer-ui-shell.md`. Summary:
 
-  private readonly messageBus = inject(MessageBusClient);
-  private pendingCorrelationId: string | null = null;
-  private subscription: SubscriptionHandle;
-
-  constructor() { /* subscribe to 'open-file' responses */ }
-  ngOnDestroy(): void { /* unsubscribe */ }
-
-  @HostListener('document:keydown', ['$event'])
-  onKeydown(event: KeyboardEvent): void;
-}
-```
-
-| Method | Trigger | Effect |
-|--------|---------|--------|
-| `onKeydown` | `document:keydown` | If Ctrl+O/Cmd+O and `pendingCorrelationId === null` → `preventDefault`, `messageBus.send('open-file')`, store correlationId |
-| subscription handler | Message_Bus inbound | If non-empty payload → set `displayText`; clear `pendingCorrelationId` |
+- **AppComponent** — CSS Grid shell host, keyboard shortcut handler, error modal overlay
+- **ShellStateService** — singleton signal-based state (tabs, activeTabId, tabPosition, pendingCorrelationId, errorMessage)
+- **MenuBarComponent** — File menu (Open..., Exit), synchronous DOM collapse before dialog
+- **TabContainerComponent** — tab headers, close buttons, position-aware
+- **TextViewAreaComponent** — empty state prompt or active tab content
+- **StatusBarComponent** — active file path display
 
 ### 4. Project File (`TextViewer.csproj`)
 
@@ -146,17 +143,17 @@ export class AppComponent implements OnDestroy {
 
 ### FileIndex Integration
 
-FileIndex is created by the caller after receiving a file path from the open-file handler. Full class diagram, interfaces, data models, thread-safety model, and testing strategy in `design-file-index.md`.
+FileIndex created by caller after receiving file path. Full class diagram, interfaces, data models, thread-safety model in `design-file-index.md`.
 
 Key integration points:
 - Caller creates `FileIndex(path, ct, logger)` → calls `StartScanAsync()`
 - Polls `State` to update Status_Display
-- Exposes `Encoding` (System.Text.Encoding) + `BomByteLength` (int) for consumers
+- Exposes `Encoding` + `BomByteLength` for consumers
 - Disposes on new file selection or app shutdown
 
 ### FileViewService Integration
 
-FileViewService wraps FileIndex to produce rectangular text views. Full design in `design-file-view-service.md`.
+FileViewService wraps FileIndex for rectangular text views. Full design in `design-file-view-service.md`.
 
 Key integration points:
 - Owns private FileIndex (lifecycle managed internally)
@@ -164,15 +161,6 @@ Key integration points:
 - Independent file handle per request → ≥4 concurrent reads
 - Partial decode: O(startCol + colCount) not O(lineLength)
 - Uses FileIndex `Encoding` + `BomByteLength` for character decoding
-
-### Frontend State
-
-```typescript
-interface AppState {
-  displayText: string;              // Current text in Display_Area ("Hello World" initially)
-  pendingCorrelationId: string | null; // Guards against duplicate dialog requests (null = idle)
-}
-```
 
 ### Window Configuration
 
@@ -184,7 +172,7 @@ interface AppState {
 
 ### Message Protocol
 
-All frontend↔backend communication uses the Message Bus envelope format. See `design-bus-service.md` for full protocol spec.
+All frontend↔backend communication uses Message Bus envelope format. See `design-bus-service.md` for full protocol spec.
 
 | Direction | Format | Example |
 |-----------|--------|---------|
@@ -201,56 +189,24 @@ All frontend↔backend communication uses the Message Bus envelope format. See `
 | Message Bus errors | See `design-bus-service.md` |
 | FileIndex errors | See `design-file-index.md` error handling table |
 | FileViewService errors | See `design-file-view-service.md` error handling table |
+| UI Shell errors | See `design-viewer-ui-shell.md` error handling table |
 | File access denied / not found | FileIndex → Failed state + Error property; caller displays |
 
 ## Correctness Properties
 
-### Property 1: State guard prevents duplicate sends
-
-*For any* sequence of Ctrl+O key presses and message responses interleaved in any order, the frontend shall never have more than one outstanding "open-file" message without an intervening response.
-
-**Validates: Requirements 3.2, 3.4**
+Properties defined per feature in their respective design docs:
+- **UI Shell**: 8 properties (state guard, file name extraction, tab lifecycle, position invariance) — see `design-viewer-ui-shell.md`
+- **File Index**: 7 properties (byte-length round-trip, char-length, tier minimality, boundary optimality, lookup, state machine, concurrency) — see `design-file-index.md`
+- **File View Service**: 6 properties (row extraction, result count, param validation, replacement chars, column counting, immutability) — see `design-file-view-service.md`
 
 ## Testing Strategy
 
-### Property-Based Tests
-
-**Library**: fast-check (TypeScript PBT)
-
-**Config**: Minimum 100 iterations per property.
-
-| Property | Generates | Asserts |
-|----------|-----------|---------|
-| State guard (Property 1) | Random sequences of `{keypress, response}` events | At most 1 outstanding send at any time |
-
-### Unit Tests
-
-| Test | Validates |
-|------|-----------|
-| Ctrl+O triggers `messageBus.send("open-file")` | Req 3.1 |
-| Other key combos don't trigger send | Req 3.1 |
-| `preventDefault` called on Ctrl+O in both states | Req 3.3 |
-| Cmd+O works (meta key) | Req 3.1 |
-| Initial `displayText` is "Hello World" | Req 6.1, 6.2 |
-| Non-empty response sets displayText | Req 5.1 |
-| Empty response leaves display unchanged | Req 5.2 |
-| Backend handler returns path on dialog confirm | Req 4.3 |
-| Backend handler returns "" on dialog cancel | Req 4.4 |
-| Angular `AppComponent` renders "Hello World" | Req 2.1 |
-| Window title is "Text Viewer" | Req 1.1 |
-
-### Integration Tests
-
-| Test | Validates |
-|------|-----------|
-| App launches without exceptions | Req 1 |
-| Ctrl+O → dialog → path displayed | Req 3.1, 4.1, 4.3, 5.1 |
-| Ctrl+O → dialog cancel → display unchanged | Req 4.4, 5.2 |
-| Published binary runs w/o external files | shared: deploy model |
+Testing strategies defined per feature in their respective design docs. Cross-cutting patterns:
 
 ### Test Boundaries
 
-- Frontend unit/property tests: mock `MessageBusClient.send()` and `subscribe()`, simulate responses via subscription handler
-- Backend unit tests: mock `IMessageBridge`, verify handler invocation and response encoding
-- Integration tests: real `MessageBusClient` with mocked bridge, verify full round-trip
-- No E2E browser automation — Photino bridge tested via integration
+- **Frontend unit/property tests**: mock `MessageBusClient.send()` and `subscribe()`, simulate responses via subscription handler
+- **Backend unit tests**: mock `IMessageBridge`, verify handler invocation and response encoding
+- **Integration tests**: real `MessageBusClient` with mocked bridge, verify full round-trip
+- **No E2E browser automation** — Photino bridge tested via integration
+- **Property-based tests**: fast-check (TS, `{ numRuns: 10 }`), FsCheck (C#, `[Property(MaxTest = 10)]`)

@@ -29,14 +29,20 @@ TextViewer/
     │   │   ├── requirements.md         # Full product reqs (all shipped features)
     │   │   ├── requirements-shared.md  # Infra/platform context (ref'd by feature specs)
     │   │   ├── requirements-file-index.md  # File Index feature reqs (ref'd by global + feature spec)
+    │   │   ├── requirements-file-view-service.md # File View Service feature reqs
+    │   │   ├── requirements-viewer-ui-shell.md   # Viewer UI Shell feature reqs
     │   │   ├── requirements-bus-service.md # Message Bus feature reqs
     │   │   ├── design.md              # Full product design (all shipped features)
     │   │   ├── design-shared.md       # Arch/patterns context (ref'd by feature specs)
     │   │   ├── design-file-index.md   # File Index feature design (ref'd by global + feature spec)
+    │   │   ├── design-file-view-service.md # File View Service feature design
+    │   │   ├── design-viewer-ui-shell.md   # Viewer UI Shell feature design
     │   │   └── design-bus-service.md  # Message Bus feature design
     │   ├── file-index/                 # Feature spec (refs _global/requirements-file-index.md)
+    │   ├── file-view-service/          # Feature spec (refs *-shared.md)
     │   ├── message-bus-service/        # Feature spec (refs *-shared.md)
     │   ├── open-file-dialog/           # Feature spec (refs *-shared.md)
+    │   ├── viewer-ui-shell/            # Feature spec (refs *-shared.md)
     │   └── viewer-app/                 # Feature spec (refs *-shared.md)
     └── steering/
 ```
@@ -78,7 +84,7 @@ Feature specs contain ONLY feature-specific behavioral requirements and design. 
 
 ### Shipped Feature Merge Pattern
 
-When a feature ships, its detailed reqs/design move to `_global/requirements-{feature}.md` and `_global/design-{feature}.md`. The feature spec folder then becomes a thin wrapper referencing those canonical docs. The combined `_global/requirements.md` and `_global/design.md` include summary entries + `#[[file:...]]` refs to the feature docs.
+When a feature ships, its detailed reqs/design move to `_global/requirements-{feature}.md` and `_global/design-{feature}.md`. The feature spec folder stays as snapshot of the feature development even if in future it becomes obsolete. Main source of truth will remain in _global and will change over time.
 
 ### Lifecycle
 

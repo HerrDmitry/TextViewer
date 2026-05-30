@@ -9,8 +9,8 @@ File View Service feature. Provides a backend service that produces a rectangula
 ## Glossary
 
 - **File_View_Service**: C# backend service producing rectangular text views from an indexed file
-- **FileIndex**: Existing C# class scanning a file and building a thread-safe index of per-line byte/char lengths (see `requirements-file-index.md`)
-- **Line_Index**: Internal data structure within FileIndex storing per-line metadata (byte length, char length)
+- **FileIndex**: (see `requirements-file-index.md`) — C# class scanning a file and building a thread-safe index of per-line byte/char lengths
+- **Line_Index**: (see `requirements-file-index.md`) — internal data structure within FileIndex storing per-line metadata
 - **View_Request**: Request specifying start line, start column, row count, column count for desired viewport
 - **View_Result**: Output of File_View_Service: list of strings representing rows of requested viewport
 - **Start_Line**: 0-based line number of first row in view (top edge)

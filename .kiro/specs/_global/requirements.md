@@ -3,6 +3,7 @@
 #[[file:.kiro/specs/_global/requirements-shared.md]]
 #[[file:.kiro/specs/_global/requirements-file-index.md]]
 #[[file:.kiro/specs/_global/requirements-file-view-service.md]]
+#[[file:.kiro/specs/_global/requirements-viewer-ui-shell.md]]
 
 ## Introduction
 
@@ -11,14 +12,13 @@ TextViewer is a cross-platform desktop application for viewing text content. Thi
 ## Glossary
 
 - **Open_File_Dialog**: The native operating system file-selection dialog provided by the OS
-- **Display_Area**: The UI region in app.component.html showing current text content
-- **Hello_World_View**: The initial view displayed to the user upon application launch
-- **FileIndex**: C# class orchestrating two-phase file scanning (see `requirements-file-index.md`)
-- **Line_Index**: Per-line length metadata store within FileIndex
-- **Status_Display**: UI region beside file name showing scan metrics
-- **File_View_Service**: C# backend service producing rectangular text views from an indexed file (see `requirements-file-view-service.md`)
-- **View_Request**: Request specifying start line, start column, row count, column count for viewport
-- **View_Result**: List of row strings representing the viewport
+- **FileIndex**: C# class orchestrating two-phase file scanning (see `requirements-file-index.md` for full glossary)
+- **Line_Index**: Per-line length metadata store within FileIndex (see `requirements-file-index.md`)
+- **Status_Display**: UI region beside file name showing scan metrics (see `requirements-file-index.md`)
+- **File_View_Service**: C# backend service producing rectangular text views (see `requirements-file-view-service.md` for full glossary)
+- **View_Request**: Request specifying viewport parameters (see `requirements-file-view-service.md`)
+- **View_Result**: List of row strings representing the viewport (see `requirements-file-view-service.md`)
+- **UI_Shell**: Top-level Angular layout — Menu_Bar, Tab_Container, Text_View_Area, Status_Bar (see `requirements-viewer-ui-shell.md` for full glossary)
 
 ## Requirements
 
@@ -32,27 +32,7 @@ TextViewer is a cross-platform desktop application for viewing text content. Thi
 2. THE Photino_Window SHALL open with a default size that is appropriate for the user's display
 3. THE Photino_Window SHALL be resizable by the user
 
-### Requirement 2: Hello World Display
-
-**User Story:** As a user, I want to see a "Hello World" message when the application starts, so that I can confirm the application is working correctly.
-
-#### Acceptance Criteria
-
-1. WHEN the Photino_Window finishes loading, THE Angular_Frontend SHALL display the text "Hello World" in the Hello_World_View
-2. THE Hello_World_View SHALL be the default view rendered on application startup
-
-### Requirement 3: Keyboard Shortcut — Open File
-
-**User Story:** As a user, I want to press Ctrl+O to open a file, so that I can quickly select a file to view.
-
-#### Acceptance Criteria
-
-1. WHEN the user presses Ctrl+O on Windows/Linux or Cmd+O on macOS, THE Frontend SHALL send an "open-file" message to the Backend via Message_Bus_Client.send — direct calls to window.external.sendMessage SHALL be prohibited
-2. WHILE the Frontend is awaiting a response from the Backend for a previous "open-file" message (pendingCorrelationId is non-null), THE Frontend SHALL not send additional "open-file" messages on subsequent Ctrl+O (or Cmd+O) key presses
-3. THE Frontend SHALL prevent the browser default behavior for the Ctrl+O (or Cmd+O) key combination regardless of dialog state
-4. WHEN the Frontend receives a file-selection response via Message_Bus_Client subscription, THE Frontend SHALL clear the pending state and resume accepting Ctrl+O (or Cmd+O) key presses
-
-### Requirement 4: Native File Dialog Invocation
+### Requirement 2: Native File Dialog Invocation
 
 **User Story:** As a user, I want to see the standard OS file dialog, so that I can browse and select a file using familiar system UI.
 
@@ -64,26 +44,22 @@ TextViewer is a cross-platform desktop application for viewing text content. Thi
 4. WHEN the user cancels the Open_File_Dialog, THE Backend handler SHALL return an empty string as the response payload
 5. IF the Backend receives an "open-file" message while the Open_File_Dialog is already displayed, THEN THE Backend SHALL ignore the message and not open a second dialog
 
-### Requirement 5: File Path Display
+### Requirement 3: Viewer UI Shell
 
-**User Story:** As a user, I want to see the full path of the selected file in the UI, so that I have confirmation of which file I chose and where it is located.
-
-#### Acceptance Criteria
-
-1. WHEN the Frontend receives a non-empty payload via its Message_Bus_Client "open-file" subscription, THE Frontend SHALL replace the Display_Area content with the full string value as received
-2. WHEN the Frontend receives an empty string payload via its Message_Bus_Client "open-file" subscription, THE Frontend SHALL retain the current Display_Area content unchanged
-
-### Requirement 6: Initial Display State
-
-**User Story:** As a user, I want to see a default message when no file has been selected, so that I know the application is ready.
+**User Story:** As a user, I want a tabbed document interface with menu, content area, and status bar, so that I can open, view, and manage multiple files.
 
 #### Acceptance Criteria
 
-1. WHEN the Application window is first displayed, THE Display_Area SHALL show the text "Hello World"
-2. WHILE no file name has been received from the Message_Bridge, THE Display_Area SHALL continue to display "Hello World"
+Full spec in `requirements-viewer-ui-shell.md`. Summary:
 
+1. THE UI_Shell SHALL provide Menu_Bar (File → Open..., Exit), Tab_Container, Text_View_Area, and Status_Bar
+2. THE UI_Shell SHALL manage tabs (create on file open, close, activate, adjacency selection)
+3. THE UI_Shell SHALL integrate with Message_Bus_Client for open-file and exit actions
+4. THE UI_Shell SHALL persist tab position preference (top/bottom) to localStorage
+5. THE UI_Shell SHALL display Empty_State_Prompt ("Ctrl-O to open a file") when no tabs open
+6. THE UI_Shell SHALL display active file path in Status_Bar
 
-### Requirement 7: File Index — Two-Phase Scanning
+### Requirement 4: File Index — Two-Phase Scanning
 
 **User Story:** As a user, I want opened files to be scanned for line metadata, so that line count and length metrics are available progressively.
 
@@ -96,7 +72,7 @@ TextViewer is a cross-platform desktop application for viewing text content. Thi
 5. THE FileIndex SHALL expose ScanState and Error as thread-safe polling fields
 6. THE caller SHALL manage FileIndex lifecycle (create, poll, dispose) and update Status_Display
 
-### Requirement 8: File Index — Status Display
+### Requirement 5: File Index — Status Display
 
 **User Story:** As a user, I want to see scan progress and results beside the file name, so that I get immediate feedback.
 
@@ -108,7 +84,7 @@ TextViewer is a cross-platform desktop application for viewing text content. Thi
 4. IF scan fails or is cancelled, THE Status_Display SHALL revert to pre-scan state
 5. IF scan fails, THE main content area SHALL display the error message
 
-### Requirement 9: File View Service — Rectangular View Extraction
+### Requirement 6: File View Service — Rectangular View Extraction
 
 **User Story:** As a caller, I want to request a rectangular region of a file by specifying viewport parameters, so that I can display file content efficiently.
 
