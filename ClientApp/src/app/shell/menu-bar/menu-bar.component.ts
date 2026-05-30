@@ -1,4 +1,4 @@
-import { ChangeDetectorRef, Component, ElementRef, inject, signal } from '@angular/core';
+import { Component, ElementRef, inject, signal } from '@angular/core';
 import { ShellStateService } from '../shell-state.service';
 
 @Component({
@@ -17,10 +17,10 @@ export class MenuBarComponent {
   closeMenu(): void { this.menuOpen.set(false); }
 
   onOpen(): void {
-    // Force immediate DOM hide — bypass Angular change detection
+    this.menuOpen.set(false);
+    // Synchronous DOM hide — ensures dropdown gone before native dialog blocks UI thread
     const dropdown = this.el.nativeElement.querySelector('.dropdown') as HTMLElement | null;
     if (dropdown) dropdown.style.display = 'none';
-    this.menuOpen.set(false);
     this.state.triggerOpenFile();
   }
 

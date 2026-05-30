@@ -33,6 +33,8 @@ export class ShellStateService implements OnDestroy {
   private readonly messageBus = inject(MessageBusClient);
   private subscription: SubscriptionHandle | undefined;
 
+  private static readonly ERROR_PREFIX = 'ERROR:';
+
   constructor() {
     this.subscription = this.messageBus.subscribe('open-file', (msg: InboundMessage) => {
       // Only process messages correlated to our pending request
@@ -41,8 +43,8 @@ export class ShellStateService implements OnDestroy {
       // Clear pending state on any correlated response
       this.pendingCorrelationId.set(null);
 
-      // Error response (payload starts with "ERROR:")
-      if (msg.payload.startsWith('ERROR:')) {
+      // Error response
+      if (msg.payload.startsWith(ShellStateService.ERROR_PREFIX)) {
         this.errorMessage.set(msg.payload);
         return;
       }
@@ -69,6 +71,8 @@ export class ShellStateService implements OnDestroy {
 
   triggerOpenFile(): void {
     if (this.pendingCorrelationId() !== null) return;
+    // Set sentinel before send to prevent re-entry even if callback fires synchronously
+    this.pendingCorrelationId.set('__pending__');
     const correlationId = this.messageBus.send('open-file');
     this.pendingCorrelationId.set(correlationId);
   }
