@@ -4,6 +4,7 @@
 #[[file:.kiro/specs/_global/design-file-index.md]]
 #[[file:.kiro/specs/_global/design-file-view-service.md]]
 #[[file:.kiro/specs/_global/design-viewer-ui-shell.md]]
+#[[file:.kiro/specs/_global/design-text-handling.md]]
 
 ## Overview
 
@@ -12,6 +13,7 @@ This document captures the full product design for all shipped features. Archite
 - File View Service → `design-file-view-service.md`
 - Viewer UI Shell → `design-viewer-ui-shell.md`
 - Message Bus → `design-bus-service.md`
+- Text Handling → `design-text-handling.md`
 
 ## Architecture
 
@@ -24,12 +26,18 @@ graph TD
     E --> F[Angular App — UI Shell]
     A --> G[MessageBusHost]
     G --> H[open-file handler]
+    G --> H2[get-view handler]
+    G --> H3[close-file handler]
+    G --> H4[get-scroll-info handler]
     H --> I[FileViewService]
+    H2 --> I
+    H3 --> I
+    H4 --> I
     I --> J[FileIndex]
     J --> K[LineIndex / SegmentDirectory]
 
     subgraph ".NET 10"
-        A; B; C; G; H; I; J; K
+        A; B; C; G; H; H2; H3; H4; I; J; K
     end
     subgraph "Native Window"
         D; E
@@ -52,7 +60,9 @@ Entry point — configures and launches Photino.Blazor app, sets up Message Bus.
 - Register Blazor root component
 - Configure Photino window properties (title, size, resizability)
 - Instantiate `PhotinoMessageBridge` + `MessageBusHost`
-- Register message handlers (e.g. "open-file", "exit") on the bus
+- Register message handlers (open-file, get-view, close-file, get-scroll-info, exit) on the bus
+- Manage FileViewService session map (Dictionary<string, FileViewService>)
+- Monitor scan state and push "scan-complete" notifications
 - Start application event loop
 
 **Interface:**
@@ -108,13 +118,13 @@ Minimal Blazor component — mounting point for Angular app.
 
 ### 3. Angular UI Shell
 
-Full component hierarchy, state management, templates, and CSS in `design-viewer-ui-shell.md`. Summary:
+Full component hierarchy, state management, templates, and CSS in `design-viewer-ui-shell.md`. Text view display, measurement, scrollbars, and view-request orchestration in `design-text-handling.md`. Summary:
 
 - **AppComponent** — CSS Grid shell host, keyboard shortcut handler, error modal overlay
-- **ShellStateService** — singleton signal-based state (tabs, activeTabId, tabPosition, pendingCorrelationId, errorMessage)
+- **ShellStateService** — singleton signal-based state (tabs, activeTabId, tabPosition, pendingCorrelationId, errorMessage, tabViewStates, viewDimensions, scrollbar signals)
 - **MenuBarComponent** — File menu (Open..., Exit), synchronous DOM collapse before dialog
 - **TabContainerComponent** — tab headers, close buttons, position-aware
-- **TextViewAreaComponent** — empty state prompt or active tab content
+- **TextViewAreaComponent** — empty state prompt, view row rendering, measurement pipeline, scrollbar display
 - **StatusBarComponent** — active file path display
 
 ### 4. Project File (`TextViewer.csproj`)
@@ -172,12 +182,13 @@ Key integration points:
 
 ### Message Protocol
 
-All frontend↔backend communication uses Message Bus envelope format. See `design-bus-service.md` for full protocol spec.
+All frontend↔backend communication uses Message Bus envelope format. See `design-bus-service.md` for full protocol spec. See `design-text-handling.md` for get-view, close-file, get-scroll-info, and scan-complete message formats.
 
 | Direction | Format | Example |
 |-----------|--------|---------|
-| JS → .NET | Envelope: `type\ncorrelationId\npayload` | `"open-file\nabc-123\n"` |
-| .NET → JS | Envelope: `type\ncorrelationId\npayload` | `"open-file\nabc-123\nC:\Users\me\report.pdf"` |
+| JS → .NET | Envelope: `type\ncorrelationId\npayload` | `"open-file\nabc-123\n40\n120"` |
+| .NET → JS | Envelope: `type\ncorrelationId\npayload` | `"open-file\nabc-123\nuuid\nC:\file.txt\nrow1\nrow2"` |
+| .NET → JS (push) | Envelope: `type\n\npayload` | `"scan-complete\n\nuuid"` |
 
 ## Error Handling
 
@@ -190,6 +201,7 @@ All frontend↔backend communication uses Message Bus envelope format. See `desi
 | FileIndex errors | See `design-file-index.md` error handling table |
 | FileViewService errors | See `design-file-view-service.md` error handling table |
 | UI Shell errors | See `design-viewer-ui-shell.md` error handling table |
+| Text Handling errors | See `design-text-handling.md` error handling table |
 | File access denied / not found | FileIndex → Failed state + Error property; caller displays |
 
 ## Correctness Properties
@@ -198,6 +210,7 @@ Properties defined per feature in their respective design docs:
 - **UI Shell**: 8 properties (state guard, file name extraction, tab lifecycle, position invariance) — see `design-viewer-ui-shell.md`
 - **File Index**: 7 properties (byte-length round-trip, char-length, tier minimality, boundary optimality, lookup, state machine, concurrency) — see `design-file-index.md`
 - **File View Service**: 6 properties (row extraction, result count, param validation, replacement chars, column counting, immutability) — see `design-file-view-service.md`
+- **Text Handling**: 12 properties (dimension computation, view request orchestration, payload round-trips, response encoding, session lifecycle, scrollbar invariants, polling lifecycle) — see `design-text-handling.md`
 
 ## Testing Strategy
 

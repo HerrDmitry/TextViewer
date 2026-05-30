@@ -32,16 +32,19 @@ TextViewer/
     │   │   ├── requirements-file-view-service.md # File View Service feature reqs
     │   │   ├── requirements-viewer-ui-shell.md   # Viewer UI Shell feature reqs
     │   │   ├── requirements-bus-service.md # Message Bus feature reqs
+    │   │   ├── requirements-text-handling.md # Text Handling feature reqs
     │   │   ├── design.md              # Full product design (all shipped features)
     │   │   ├── design-shared.md       # Arch/patterns context (ref'd by feature specs)
     │   │   ├── design-file-index.md   # File Index feature design (ref'd by global + feature spec)
     │   │   ├── design-file-view-service.md # File View Service feature design
     │   │   ├── design-viewer-ui-shell.md   # Viewer UI Shell feature design
-    │   │   └── design-bus-service.md  # Message Bus feature design
+    │   │   ├── design-bus-service.md  # Message Bus feature design
+    │   │   └── design-text-handling.md # Text Handling feature design
     │   ├── file-index/                 # Feature spec (refs _global/requirements-file-index.md)
     │   ├── file-view-service/          # Feature spec (refs *-shared.md)
     │   ├── message-bus-service/        # Feature spec (refs *-shared.md)
     │   ├── open-file-dialog/           # Feature spec (refs *-shared.md)
+    │   ├── text-handling/              # Feature spec (refs *-shared.md)
     │   ├── viewer-ui-shell/            # Feature spec (refs *-shared.md)
     │   └── viewer-app/                 # Feature spec (refs *-shared.md)
     └── steering/
