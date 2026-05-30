@@ -14,7 +14,7 @@ Viewer UI Shell feature. Defines the top-level layout of the Angular frontend: a
 - **Tab_Container**: A region holding Tab_Headers; can be positioned at the top or bottom of the Text_View_Area
 - **Tab_Header**: A clickable label representing one open file, displaying the file name and a Close_Button
 - **Close_Button**: A button on each Tab_Header that closes the associated tab
-- **Text_View_Area**: The main content region displaying file content for the active tab or the Empty_State_Prompt
+- **Text_View_Area**: The main content region displaying the Empty_State_Prompt when no tabs are open (file content rendering is handled by a separate feature)
 - **Empty_State_Prompt**: The placeholder text "Ctrl-O to open a file" shown when no tabs are open
 - **Status_Bar**: A horizontal bar at the bottom of the window displaying contextual information
 - **Active_Tab**: The currently selected tab whose content is displayed in Text_View_Area
@@ -40,8 +40,8 @@ Viewer UI Shell feature. Defines the top-level layout of the Angular frontend: a
 1. THE Menu_Bar SHALL contain a single menu labeled "File"
 2. WHEN the user clicks the "File" label in Menu_Bar, THE Menu_Bar SHALL expand File_Menu displaying its items
 3. THE File_Menu SHALL contain exactly two items in order: "Open..." and "Exit"
-4. WHEN the user selects "Open..." from File_Menu, THE UI_Shell SHALL trigger the open-file action (send "open-file" message via Message_Bus_Client)
-5. WHEN the user selects "Exit" from File_Menu, THE UI_Shell SHALL close the Photino_Window
+4. WHEN the user selects "Open..." from File_Menu, THE Menu_Bar SHALL immediately collapse File_Menu (synchronous DOM hide) before triggering the open-file action, ensuring the dropdown is visually removed even if the native file dialog blocks the UI thread
+5. WHEN the user selects "Exit" from File_Menu, THE UI_Shell SHALL send an "exit" message via Message_Bus_Client to the Backend, which SHALL close the Photino_Window
 6. WHEN the user presses Ctrl+O on Windows/Linux or Cmd+O on macOS, THE UI_Shell SHALL trigger the open-file action identical to selecting "Open..." from File_Menu, regardless of current UI focus or interaction state
 7. WHILE the UI_Shell is awaiting a response from a previous open-file request (state begins when the open-file message is sent via Message_Bus_Client and ends when a correlated response is received or the request times out per Message_Bus timeout policy), THE UI_Shell SHALL not send additional open-file messages regardless of trigger source (menu or keyboard)
 8. WHILE the UI_Shell is awaiting a response from a previous open-file request, THE UI_Shell SHALL visually disable the "Open..." menu item and ignore the keyboard shortcut without displaying an error
@@ -82,7 +82,7 @@ Viewer UI Shell feature. Defines the top-level layout of the Angular frontend: a
 1. WHEN the Application starts with no files open, THE Text_View_Area SHALL display the text "Ctrl-O to open a file" centered horizontally and vertically within the Text_View_Area bounds
 2. WHILE no tabs exist in Tab_Container, THE Text_View_Area SHALL continue to display the Empty_State_Prompt
 3. WHEN the last tab is closed, THE Text_View_Area SHALL display the Empty_State_Prompt
-4. WHEN a new tab is created from the empty state, THE Text_View_Area SHALL remove the Empty_State_Prompt and display the new tab's content
+4. WHEN a new tab is created from the empty state, THE Text_View_Area SHALL remove the Empty_State_Prompt (file content rendering is handled by a separate feature)
 
 ### Requirement 6: Status Bar Display
 

@@ -59,6 +59,12 @@ AppComponent (shell layout host)
 
 6. **localStorage for tab position** — Tab position is the only persisted preference. `ShellStateService` reads from `localStorage('tabPosition')` on init (defaults to `'top'` if absent or invalid) and writes on every `setTabPosition()` call. This satisfies Req 4.2 ("last saved position preference") with minimal persistence scope.
 
+7. **Menu collapse via synchronous DOM manipulation** — The native file dialog (Photino `ShowOpenFile`) blocks the webview UI thread. Angular change detection cannot flush before the dialog appears. To guarantee the dropdown is visually hidden before the dialog opens, `onOpen()` directly sets `style.display = 'none'` on the dropdown element. The `[style.display]` binding (always-in-DOM pattern) re-syncs state after the dialog closes.
+
+8. **Exit via message bus** — `window.close()` is a no-op in Photino's webview context. Exit is implemented by sending an `'exit'` message to the backend, where the handler calls `app.MainWindow.Close()`.
+
+9. **Race guard sentinel in triggerOpenFile** — `pendingCorrelationId` is set to `'__pending__'` before calling `messageBus.send()`, then updated to the real correlationId after. This prevents re-entry even if `send()` were to synchronously trigger a response callback (defensive hardening — current bus uses microtask dispatch so the race cannot occur in practice).
+
 ## Components and Interfaces
 
 ### 1. ShellStateService
@@ -93,11 +99,12 @@ export class ShellStateService implements OnDestroy {
   ngOnDestroy(): void { /* unsubscribe */ }
 
   // --- Actions ---
-  triggerOpenFile(): void;       // sends open-file if not pending
+  triggerOpenFile(): void;       // sets sentinel, sends open-file if not pending
   closeTab(tabId: string): void; // removes tab, adjusts activeTabId
   activateTab(tabId: string): void; // sets activeTabId
   setTabPosition(position: TabPosition): void; // updates signal + persists to localStorage
   dismissError(): void;          // clears errorMessage to null
+  sendExit(): void;              // sends 'exit' message to backend → window closes
 
   // --- Persistence ---
   private loadTabPosition(): TabPosition {
@@ -201,6 +208,7 @@ app-status-bar  { grid-area: status; }
 })
 export class MenuBarComponent {
   private readonly state = inject(ShellStateService);
+  private readonly el = inject(ElementRef);
   readonly isOpenDisabled = this.state.isOpenFilePending;
   menuOpen = signal(false);
 
@@ -208,12 +216,15 @@ export class MenuBarComponent {
   closeMenu(): void { this.menuOpen.set(false); }
 
   onOpen(): void {
-    this.closeMenu();
+    this.menuOpen.set(false);
+    // Synchronous DOM hide — ensures dropdown gone before native dialog blocks UI thread
+    const dropdown = this.el.nativeElement.querySelector('.dropdown') as HTMLElement | null;
+    if (dropdown) dropdown.style.display = 'none';
     this.state.triggerOpenFile();
   }
 
   onExit(): void {
-    window.close();
+    this.state.sendExit();
   }
 }
 ```
@@ -223,12 +234,10 @@ export class MenuBarComponent {
 <nav class="menu-bar" (document:keydown.escape)="closeMenu()" (document:click)="closeMenu()">
   <div class="menu-item" (click)="toggleMenu(); $event.stopPropagation()">
     <span class="menu-label">File</span>
-    @if (menuOpen()) {
-      <ul class="dropdown" (click)="$event.stopPropagation()">
-        <li [class.disabled]="isOpenDisabled()" (click)="!isOpenDisabled() && onOpen()">Open...</li>
-        <li (click)="onExit()">Exit</li>
-      </ul>
-    }
+    <ul class="dropdown" [style.display]="menuOpen() ? 'block' : 'none'" (click)="$event.stopPropagation()">
+      <li [class.disabled]="isOpenDisabled()" (click)="!isOpenDisabled() && onOpen()">Open...</li>
+      <li (click)="onExit()">Exit</li>
+    </ul>
   </div>
 </nav>
 ```
@@ -291,9 +300,7 @@ export class TextViewAreaComponent {
 **Template** (`text-view-area.component.html`):
 ```html
 <div class="text-view-area">
-  @if (hasOpenTabs()) {
-    <pre class="file-content">{{ activeTab()?.filePath }}</pre>
-  } @else {
+  @if (!hasOpenTabs()) {
     <div class="empty-state">Ctrl-O to open a file</div>
   }
 </div>
@@ -371,14 +378,20 @@ function extractFileName(filePath: string): string {
 
 The `ShellStateService.triggerOpenFile()` method:
 1. Checks `pendingCorrelationId() !== null` → early return (guard)
-2. Calls `messageBus.send('open-file')` → stores returned correlationId
-3. Sets `pendingCorrelationId` signal
+2. Sets `pendingCorrelationId` to sentinel `'__pending__'` (prevents re-entry if `send()` triggers synchronous callback)
+3. Calls `messageBus.send('open-file')` → stores returned correlationId
+4. Sets `pendingCorrelationId` signal to actual correlationId
+
+The `ShellStateService.sendExit()` method:
+1. Calls `messageBus.send('exit')` — fire-and-forget, backend closes window
 
 The subscription handler (registered in constructor):
 1. Receives `InboundMessage` with `messageType === 'open-file'`
-2. If response is an error → sets `errorMessage` signal with the error text
-3. If `msg.payload !== ''` and not error → creates new Tab, appends to `tabs`, sets as active
-4. Clears `pendingCorrelationId` (regardless of empty/non-empty/error payload)
+2. Checks `msg.correlationId === this.pendingCorrelationId()` — if not matching, ignore
+3. Clears `pendingCorrelationId` (on any correlated response)
+4. If payload starts with `ERROR_PREFIX` (`'ERROR:'`) → sets `errorMessage` signal with the error text
+5. If `msg.payload === ''` → no-op (user cancelled)
+6. If non-empty non-error payload → creates new Tab (id via crypto.randomUUID(), filePath = payload, fileName via extractFileName), appends to `tabs`, sets as active
 
 The `setTabPosition(position)` method:
 1. Sets `tabPosition` signal to the new value
@@ -450,7 +463,7 @@ The `dismissError()` method:
 | Open-file response is error (non-empty error payload) | Set `errorMessage` signal with error text → AppComponent renders modal dialog; clear `pendingCorrelationId` to unblock |
 | User dismisses error modal | `dismissError()` sets `errorMessage` to null → modal removed from DOM |
 | MessageBusClient timeout on open-file | Timeout notification delivered via subscription (empty payload), clears pending state |
-| Window.close() fails (unlikely in Photino) | No recovery — Photino manages window lifecycle |
+| Window exit via "Exit" menu | `sendExit()` sends `'exit'` message → backend handler calls `app.MainWindow.Close()` |
 | Invalid file path characters in response | Accept as-is — backend validates; frontend displays what it receives |
 | Tab close on already-removed tab (race) | No-op — `closeTab` checks tab exists in array before operating |
 | localStorage unavailable or throws | `loadTabPosition` catches and returns `'top'` default; `persistTabPosition` is best-effort (no-op on failure) |
@@ -489,7 +502,7 @@ The `dismissError()` method:
 | Other key combos don't trigger | Req 2.6 |
 | preventDefault called on Ctrl+O | Req 7.5 |
 | Menu "Open..." click triggers triggerOpenFile | Req 2.4 |
-| Menu "Exit" click calls window.close() | Req 2.5 |
+| Menu "Exit" click sends 'exit' message via bus | Req 2.5 |
 | Menu opens on File click, closes on Escape | Req 2.2, 2.9 |
 | File click opens menu without immediate close from document click handler (stopPropagation) | Req 2.2, 2.9 |
 | Escape key closes open menu | Req 2.9 |
