@@ -59,8 +59,15 @@ graph LR
 | `Program.cs` | Entry point, window config, MessageBusHost setup, handler registration |
 | `App.razor` | Blazor root component, HTML shell loading Angular |
 | `TextViewer.csproj` | MSBuild orchestration, publish config, embedded resources |
-| `ClientApp/src/app/app.component.ts` | Angular root component — injects MessageBusClient |
-| `ClientApp/src/app/app.component.html` | Angular root template |
+| `ClientApp/src/app/app.component.ts` | Angular root — shell host, keyboard shortcut, error modal |
+| `ClientApp/src/app/app.component.html` | Shell layout template (CSS Grid) |
+| `ClientApp/src/app/shell/shell-state.service.ts` | ShellStateService — signal-based tab/menu/status state |
+| `ClientApp/src/app/shell/shell.types.ts` | Tab, TabPosition types |
+| `ClientApp/src/app/shell/extract-file-name.ts` | File name extraction utility |
+| `ClientApp/src/app/shell/menu-bar/` | MenuBarComponent (File menu, Open/Exit) |
+| `ClientApp/src/app/shell/tab-container/` | TabContainerComponent (tab headers, close) |
+| `ClientApp/src/app/shell/text-view-area/` | TextViewAreaComponent (content / empty state) |
+| `ClientApp/src/app/shell/status-bar/` | StatusBarComponent (active file path) |
 | `ClientApp/src/app/services/message-bus-client.service.ts` | Message_Bus_Client singleton |
 | `Services/MessageBusHost.cs` | Message_Bus_Host (.NET) |
 | `Services/FileIndex.cs` | FileIndex — two-phase file scanner |
@@ -116,5 +123,5 @@ All operations that can fail or produce structured outcomes SHALL use `Result<T,
 - **Fail-fast on startup**: No recovery for infrastructure failures
 - **Signal-based state**: Angular signals for reactive UI
 - **Guard patterns**: Prevent duplicate operations via nullable correlationId (null = idle, non-null = awaiting)
-- **No persistent storage**: State in component signals, resets on restart (until file content features)
+- **Minimal persistent storage**: Only user preferences (e.g. tab position) persisted to localStorage; all runtime state resets on restart
 - **Single project structure**: .NET host + Angular source in one repo

@@ -1,1 +1,15 @@
-<h1>{{ displayText() }}</h1>
+<div class="shell" [class.tabs-bottom]="tabPosition() === 'bottom'">
+  <app-menu-bar />
+  <app-tab-container />
+  <app-text-view-area />
+  <app-status-bar />
+</div>
+
+@if (errorMessage()) {
+  <div class="error-overlay" (click)="dismissError()">
+    <div class="error-modal" role="alertdialog" aria-modal="true" (click)="$event.stopPropagation()">
+      <p class="error-text">{{ errorMessage() }}</p>
+      <button class="error-dismiss" (click)="dismissError()">OK</button>
+    </div>
+  </div>
+}

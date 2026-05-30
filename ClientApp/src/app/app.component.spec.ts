@@ -1,75 +1,40 @@
 /**
- * Unit tests for frontend keyboard handling and display logic via MessageBusClient.
+ * Unit tests for AppComponent keyboard handling and error modal logic.
  *
- * Validates: Requirements 9.1, 9.2, 9.3, 9.4
+ * Validates: Requirements 2.6, 7.5, 7.6
  */
-import { MessageBusClient } from './services/message-bus-client.service';
-import { InboundMessage, SubscriptionHandle } from './services/message-bus.types';
 
-describe('AppComponent — keyboard and display logic (MessageBusClient)', () => {
-  let sendMock: jest.Mock;
-  let subscribeMock: jest.Mock;
-  let subscribeHandler: ((msg: InboundMessage) => void) | null;
-  let unsubscribeMock: jest.Mock;
-
-  beforeEach(() => {
-    sendMock = jest.fn().mockReturnValue('test-correlation-id');
-    unsubscribeMock = jest.fn();
-    subscribeHandler = null;
-
-    subscribeMock = jest.fn((messageType: string, handler: (msg: InboundMessage) => void) => {
-      subscribeHandler = handler;
-      return { unsubscribe: unsubscribeMock } as SubscriptionHandle;
-    });
-
-    // Mock window.external for MessageBusClient constructor (it registers receiveMessage)
-    Object.defineProperty(window, 'external', {
-      value: {
-        sendMessage: jest.fn(),
-        receiveMessage: jest.fn(),
-      },
-      writable: true,
-      configurable: true,
-    });
-  });
+describe('AppComponent — keyboard handling and error modal', () => {
+  let triggerOpenFileMock: jest.Mock;
+  let dismissErrorMock: jest.Mock;
+  let errorMessageValue: string | null;
 
   /**
-   * Creates a minimal component replica matching AppComponent logic.
-   * Uses a mock MessageBusClient to test the exact same state machine.
+   * Creates a minimal component replica matching AppComponent.onKeydown and dismissError logic.
+   * Uses a mock ShellStateService to verify delegation.
    */
   function createComponent() {
-    let displayText = 'Hello World';
-    let pendingCorrelationId: string | null = null;
+    triggerOpenFileMock = jest.fn();
+    dismissErrorMock = jest.fn(() => { errorMessageValue = null; });
+    errorMessageValue = null;
 
-    const messageBus = {
-      send: sendMock,
-      subscribe: subscribeMock,
+    const state = {
+      triggerOpenFile: triggerOpenFileMock,
+      dismissError: dismissErrorMock,
+      tabPosition: () => 'top' as const,
+      errorMessage: () => errorMessageValue,
     };
 
-    // Mirrors constructor: subscribe to 'open-file'
-    const subscription = messageBus.subscribe('open-file', (msg: InboundMessage) => {
-      if (msg.payload !== '') {
-        displayText = msg.payload;
-      }
-      pendingCorrelationId = null;
-    });
-
     return {
-      get displayText() { return displayText; },
-      get pendingCorrelationId() { return pendingCorrelationId; },
-      get subscription() { return subscription; },
+      get errorMessage() { return state.errorMessage(); },
       onKeydown(event: { ctrlKey: boolean; metaKey: boolean; key: string; preventDefault: () => void }) {
-        const isCtrlO = (event.ctrlKey || event.metaKey) && event.key === 'o';
+        const isCtrlO = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'o';
         if (!isCtrlO) return;
         event.preventDefault();
-
-        // Guard: don't send while awaiting response
-        if (pendingCorrelationId !== null) return;
-
-        pendingCorrelationId = messageBus.send('open-file');
+        state.triggerOpenFile();
       },
-      ngOnDestroy() {
-        subscription.unsubscribe();
+      dismissError() {
+        state.dismissError();
       },
     };
   }
@@ -84,21 +49,42 @@ describe('AppComponent — keyboard and display logic (MessageBusClient)', () =>
     };
   }
 
-  // --- Requirement 9.1: Ctrl+O triggers messageBus.send("open-file") ---
+  // --- Requirement 2.6: Ctrl+O (lowercase 'o') triggers triggerOpenFile ---
 
-  it('Ctrl+O triggers messageBus.send("open-file")', () => {
+  it('Ctrl+O (lowercase "o") keydown triggers triggerOpenFile', () => {
     const component = createComponent();
-    const event = makeKeyEvent({ ctrlKey: true });
+    const event = makeKeyEvent({ ctrlKey: true, key: 'o' });
 
     component.onKeydown(event);
 
-    expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(sendMock).toHaveBeenCalledWith('open-file');
+    expect(triggerOpenFileMock).toHaveBeenCalledTimes(1);
   });
 
-  // --- Requirement 9.1: Other key combos don't trigger send ---
+  // --- Requirement 2.6: Ctrl+O (uppercase 'O') triggers triggerOpenFile ---
 
-  it('other key combos do not trigger messageBus.send', () => {
+  it('Ctrl+O (uppercase "O") keydown triggers triggerOpenFile', () => {
+    const component = createComponent();
+    const event = makeKeyEvent({ ctrlKey: true, key: 'O' });
+
+    component.onKeydown(event);
+
+    expect(triggerOpenFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  // --- Requirement 2.6: Cmd+O (metaKey) triggers triggerOpenFile ---
+
+  it('Cmd+O (metaKey) triggers triggerOpenFile', () => {
+    const component = createComponent();
+    const event = makeKeyEvent({ metaKey: true, key: 'o' });
+
+    component.onKeydown(event);
+
+    expect(triggerOpenFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  // --- Requirement 2.6: Other key combos don't trigger ---
+
+  it('other key combos do not trigger triggerOpenFile', () => {
     const component = createComponent();
 
     // Plain 'o' without modifier
@@ -107,11 +93,13 @@ describe('AppComponent — keyboard and display logic (MessageBusClient)', () =>
     component.onKeydown(makeKeyEvent({ ctrlKey: true, key: 'x' }));
     // Shift+O (no ctrl/meta)
     component.onKeydown(makeKeyEvent({ key: 'O' }));
+    // Ctrl+A
+    component.onKeydown(makeKeyEvent({ ctrlKey: true, key: 'a' }));
 
-    expect(sendMock).not.toHaveBeenCalled();
+    expect(triggerOpenFileMock).not.toHaveBeenCalled();
   });
 
-  // --- Requirement 9.1: preventDefault called on Ctrl+O ---
+  // --- Requirement 7.5: preventDefault called on Ctrl+O ---
 
   it('preventDefault is called on Ctrl+O', () => {
     const component = createComponent();
@@ -119,127 +107,61 @@ describe('AppComponent — keyboard and display logic (MessageBusClient)', () =>
 
     component.onKeydown(event);
 
-    expect(event.preventDefault).toHaveBeenCalled();
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
   });
 
-  it('preventDefault is called on Ctrl+O even while awaiting response', () => {
-    const component = createComponent();
-
-    // First press — sets pending
-    component.onKeydown(makeKeyEvent({ ctrlKey: true }));
-
-    // Second press — still pending
-    const event2 = makeKeyEvent({ ctrlKey: true });
-    component.onKeydown(event2);
-
-    expect(event2.preventDefault).toHaveBeenCalled();
-  });
-
-  // --- Requirement 9.1: Cmd+O works (meta key) ---
-
-  it('Cmd+O (meta key) triggers messageBus.send("open-file")', () => {
+  it('preventDefault is called on Cmd+O', () => {
     const component = createComponent();
     const event = makeKeyEvent({ metaKey: true });
 
     component.onKeydown(event);
 
-    expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(sendMock).toHaveBeenCalledWith('open-file');
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
   });
 
-  // --- Requirement 9.4: Initial displayText is "Hello World" ---
+  it('preventDefault is NOT called for non-matching keys', () => {
+    const component = createComponent();
+    const event = makeKeyEvent({ ctrlKey: true, key: 'x' });
 
-  it('initial displayText is "Hello World"', () => {
+    component.onKeydown(event);
+
+    expect(event.preventDefault).not.toHaveBeenCalled();
+  });
+
+  // --- Requirement 7.6: Error modal displayed when errorMessage is non-null ---
+
+  it('errorMessage is non-null when an error exists', () => {
+    const component = createComponent();
+    errorMessageValue = 'ERROR: File not found';
+
+    expect(component.errorMessage).toBe('ERROR: File not found');
+  });
+
+  it('errorMessage is null when no error exists', () => {
     const component = createComponent();
 
-    expect(component.displayText).toBe('Hello World');
+    expect(component.errorMessage).toBeNull();
   });
 
-  // --- Requirement 9.2: Non-empty response sets displayText ---
+  // --- Requirement 7.6: dismissError() clears errorMessage to null ---
 
-  it('non-empty response sets displayText to full received string', () => {
+  it('dismissError() calls state.dismissError() which clears errorMessage to null', () => {
     const component = createComponent();
+    errorMessageValue = 'ERROR: Something went wrong';
 
-    // Trigger a send first
-    component.onKeydown(makeKeyEvent({ ctrlKey: true }));
+    component.dismissError();
 
-    // Simulate response via subscriber callback
-    subscribeHandler!({
-      messageType: 'open-file',
-      correlationId: 'test-correlation-id',
-      payload: 'C:\\Users\\me\\documents\\report.pdf',
-    });
-
-    expect(component.displayText).toBe('C:\\Users\\me\\documents\\report.pdf');
+    expect(dismissErrorMock).toHaveBeenCalledTimes(1);
+    expect(component.errorMessage).toBeNull();
   });
 
-  // --- Requirement 9.4: Empty response leaves display unchanged ---
-
-  it('empty response leaves displayText unchanged', () => {
+  it('dismissError() can be called when errorMessage is already null (no-op)', () => {
     const component = createComponent();
+    errorMessageValue = null;
 
-    // Trigger a send
-    component.onKeydown(makeKeyEvent({ ctrlKey: true }));
+    component.dismissError();
 
-    // Simulate empty response (user cancelled dialog)
-    subscribeHandler!({
-      messageType: 'open-file',
-      correlationId: 'test-correlation-id',
-      payload: '',
-    });
-
-    expect(component.displayText).toBe('Hello World');
-  });
-
-  // --- Requirement 9.3: Guard prevents duplicate sends while awaiting ---
-
-  it('does not send while awaiting response (pendingCorrelationId is set)', () => {
-    const component = createComponent();
-
-    // First press — sends
-    component.onKeydown(makeKeyEvent({ ctrlKey: true }));
-    expect(sendMock).toHaveBeenCalledTimes(1);
-
-    // Second press — blocked by guard
-    component.onKeydown(makeKeyEvent({ ctrlKey: true }));
-    expect(sendMock).toHaveBeenCalledTimes(1);
-  });
-
-  // --- Requirement 9.3: Guard clears after response ---
-
-  it('resumes accepting Ctrl+O after response clears pending state', () => {
-    const component = createComponent();
-
-    // First press — sends
-    component.onKeydown(makeKeyEvent({ ctrlKey: true }));
-    expect(sendMock).toHaveBeenCalledTimes(1);
-
-    // Response arrives — clears pending
-    subscribeHandler!({
-      messageType: 'open-file',
-      correlationId: 'test-correlation-id',
-      payload: '/some/file.txt',
-    });
-
-    // Second press — should send again
-    component.onKeydown(makeKeyEvent({ ctrlKey: true }));
-    expect(sendMock).toHaveBeenCalledTimes(2);
-  });
-
-  // --- Subscription lifecycle ---
-
-  it('subscribes to "open-file" on construction', () => {
-    createComponent();
-
-    expect(subscribeMock).toHaveBeenCalledTimes(1);
-    expect(subscribeMock).toHaveBeenCalledWith('open-file', expect.any(Function));
-  });
-
-  it('unsubscribes on destroy', () => {
-    const component = createComponent();
-
-    component.ngOnDestroy();
-
-    expect(unsubscribeMock).toHaveBeenCalledTimes(1);
+    expect(dismissErrorMock).toHaveBeenCalledTimes(1);
+    expect(component.errorMessage).toBeNull();
   });
 });

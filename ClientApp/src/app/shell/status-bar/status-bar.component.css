@@ -1,0 +1,16 @@
+.status-bar {
+  display: flex;
+  align-items: center;
+  padding: 2px 8px;
+  background: #f0f0f0;
+  border-top: 1px solid #ccc;
+  font-size: 12px;
+  min-height: 22px;
+  overflow: hidden;
+}
+
+.file-path {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

@@ -1,0 +1,10 @@
+<div class="tab-strip">
+  @for (tab of tabs(); track tab.id) {
+    <div class="tab-header"
+         [class.active]="tab.id === activeTabId()"
+         (click)="onTabClick(tab.id)">
+      <span class="tab-label">{{ tab.fileName }}</span>
+      <button class="close-btn" (click)="onCloseTab(tab.id, $event)" aria-label="Close tab">×</button>
+    </div>
+  }
+</div>
