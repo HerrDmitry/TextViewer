@@ -14,3 +14,17 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+.wrap-checkbox {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.wrap-checkbox input[type="checkbox"] {
+  cursor: pointer;
+}

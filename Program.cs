@@ -1,3 +1,4 @@
+using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Logging;
@@ -100,6 +101,11 @@ public class Program
             return Task.FromResult<string?>(HandleGetScrollInfo(payload, sessions, sessionLock));
         });
 
+        messageBus.RegisterHandler("get-line-lengths", (correlationId, payload) =>
+        {
+            return Task.FromResult<string?>(HandleGetLineLengths(payload, sessions, sessionLock));
+        });
+
         messageBus.RegisterHandler("exit", (correlationId, payload) =>
         {
             app.MainWindow.Close();
@@ -142,7 +148,7 @@ public class Program
     }
 
     /// <summary>
-    /// Handles "get-view" message: parses payload, looks up session, calls GetViewAsync.
+    /// Handles "get-view" message: parses payload, looks up session, calls GetViewAsync or GetWrappedViewAsync.
     /// Extracted for testability.
     /// </summary>
     internal static async Task<string?> HandleGetView(
@@ -150,14 +156,41 @@ public class Program
         Dictionary<string, FileViewService> sessions,
         object sessionLock)
     {
-        // Parse payload: viewSessionId\nstartLine\nstartCol\nrowCount\ncolCount
         var fields = payload.Split('\n');
+
+        // Detect wrapped mode: second field is "W"
+        if (fields.Length == 5 && fields[1] == "W")
+        {
+            // Wrapped-mode request: viewSessionId\nW\nstartLine\ncharOffset\ncharCount
+            var viewSessionId = fields[0];
+
+            if (!int.TryParse(fields[2], out var startLine) || startLine < 0)
+                return "ERROR: startLine out of range";
+            if (!int.TryParse(fields[3], out var charOffset) || charOffset < 0)
+                return "ERROR: characterOffset out of range";
+            if (!int.TryParse(fields[4], out var charCount) || charCount < 1)
+                return "ERROR: characterCount out of range";
+
+            FileViewService? service;
+            lock (sessionLock) { sessions.TryGetValue(viewSessionId, out service); }
+            if (service is null)
+                return "ERROR: Session not found";
+
+            var result = await service.GetWrappedViewAsync(
+                startLine, charOffset, charCount);
+            if (!result.IsSuccess)
+                return result.Error.Message;
+
+            return result.Value;
+        }
+
+        // Standard rectangular mode (existing logic)
         if (fields.Length != 5)
             return "ERROR:Invalid payload structure: expected 5 fields";
 
-        var viewSessionId = fields[0];
+        var rectViewSessionId = fields[0];
 
-        if (!int.TryParse(fields[1], out var startLine) || startLine < 0)
+        if (!int.TryParse(fields[1], out var rectStartLine) || rectStartLine < 0)
             return "ERROR:Invalid field: startLine";
         if (!int.TryParse(fields[2], out var startCol) || startCol < 0)
             return "ERROR:Invalid field: startCol";
@@ -166,22 +199,22 @@ public class Program
         if (!int.TryParse(fields[4], out var colCount) || colCount < 1)
             return "ERROR:Invalid field: colCount";
 
-        FileViewService? service;
+        FileViewService? rectService;
         lock (sessionLock)
         {
-            sessions.TryGetValue(viewSessionId, out service);
+            sessions.TryGetValue(rectViewSessionId, out rectService);
         }
 
-        if (service is null)
-            return $"ERROR:Session not found: {viewSessionId}";
+        if (rectService is null)
+            return $"ERROR:Session not found: {rectViewSessionId}";
 
-        var result = await service.GetViewAsync(startLine, startCol, rowCount, colCount);
+        var rectResult = await rectService.GetViewAsync(rectStartLine, startCol, rowCount, colCount);
 
-        if (!result.IsSuccess)
-            return $"ERROR:{result.Error.Message}";
+        if (!rectResult.IsSuccess)
+            return $"ERROR:{rectResult.Error.Message}";
 
         // Strip line-ending delimiters from each row, join with \n
-        var rows = result.Value.Rows;
+        var rows = rectResult.Value.Rows;
         var stripped = new string[rows.Count];
         for (int i = 0; i < rows.Count; i++)
         {
@@ -249,6 +282,53 @@ public class Program
 
         // Response: scanState\nlineCount\nmaxByteLength\nmaxCharLength
         return $"{scanState}\n{lineCount}\n{maxByteLength}\n{maxCharLength}";
+    }
+
+    /// <summary>
+    /// Handles "get-line-lengths" message: looks up session, returns newline-delimited
+    /// list of integer char lengths (one per logical line, content length excluding delimiter).
+    /// Uses GetCharLength from LineIndex; falls back to GetByteLength if char length not yet computed.
+    /// Extracted for testability.
+    /// </summary>
+    internal static string HandleGetLineLengths(
+        string payload,
+        Dictionary<string, FileViewService> sessions,
+        object sessionLock)
+    {
+        var viewSessionId = payload;
+
+        FileViewService? service;
+        lock (sessionLock)
+        {
+            sessions.TryGetValue(viewSessionId, out service);
+        }
+
+        if (service is null)
+            return $"ERROR:Session not found: {viewSessionId}";
+
+        var lineIndex = service.LineIndex;
+        var lineCount = lineIndex.LineCount;
+
+        if (lineCount == 0)
+            return "";
+
+        var sb = new StringBuilder();
+        for (int i = 0; i < lineCount; i++)
+        {
+            if (i > 0) sb.Append('\n');
+            var charLen = lineIndex.GetCharLength(i);
+            if (charLen.HasValue)
+            {
+                sb.Append(charLen.Value);
+            }
+            else
+            {
+                // Fallback to byte length if char length not yet computed
+                sb.Append(lineIndex.GetByteLength(i));
+            }
+        }
+
+        return sb.ToString();
     }
 
     /// <summary>

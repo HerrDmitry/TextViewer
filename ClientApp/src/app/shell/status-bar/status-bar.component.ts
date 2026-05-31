@@ -10,4 +10,9 @@ import { ShellStateService } from '../shell-state.service';
 export class StatusBarComponent {
   private readonly state = inject(ShellStateService);
   readonly filePath = this.state.activeFilePath;
+  readonly wrapMode = this.state.wrapMode;
+
+  onWrapToggle(): void {
+    this.state.toggleWrapMode();
+  }
 }

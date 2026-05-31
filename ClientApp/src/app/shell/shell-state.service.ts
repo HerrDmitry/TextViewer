@@ -2,6 +2,7 @@ import { computed, Injectable, inject, OnDestroy, signal } from '@angular/core';
 import { MessageBusClient } from '../services/message-bus-client.service';
 import { InboundMessage, SubscriptionHandle } from '../services/message-bus.types';
 import { extractFileName } from './extract-file-name';
+import { splitIntoVisualRows, scrollByVisualRows, computeGutterWidth, computeNonWrappedLineNumbers, computeWrappedGutterNumbers, computeWrappedScrollbarMax } from './line-wrap-utils';
 import { Tab, TabPosition, TabViewState, ScrollbarState, ScanStateValue, ViewDimensions, DragState } from './shell.types';
 
 /** Number of lines/columns to scroll per mouse wheel tick */
@@ -57,6 +58,10 @@ export class ShellStateService implements OnDestroy {
   readonly tabViewStates = signal<Map<string, TabViewState>>(new Map());
   readonly viewDimensions = signal<ViewDimensions | null>(null);
   readonly dragState = signal<DragState | null>(null);
+  readonly wrapMode = signal<boolean>(false);
+  readonly lineLengths = signal<Map<number, number>>(new Map());
+  readonly totalLogicalLines = signal<number>(0);
+  readonly charMetricsWidth = signal<number>(0);
 
   // --- Computed signals ---
   readonly activeTab = computed(() => {
@@ -91,6 +96,50 @@ export class ShellStateService implements OnDestroy {
     return state?.scrollbarState ?? null;
   });
 
+  readonly activeTabViewState = computed(() => {
+    const tab = this.activeTab();
+    if (!tab) return null;
+    return this.tabViewStates().get(tab.viewSessionId) ?? null;
+  });
+
+  readonly activeResponseContent = computed(() => {
+    const tab = this.activeTab();
+    if (!tab) return '';
+    const state = this.tabViewStates().get(tab.viewSessionId);
+    return state?.rawResponseContent ?? '';
+  });
+
+  readonly activeTotalLogicalLines = computed<number>(() => {
+    // In wrapped mode, verticalMax represents visual rows, not logical lines.
+    // Use totalLogicalLines signal (from get-line-lengths response) when available.
+    const total = this.totalLogicalLines();
+    if (total > 0) return total;
+    // Fallback to scrollbar verticalMax (logical line count in non-wrapped mode)
+    const sb = this.activeScrollbarState();
+    if (!sb) return 0;
+    return sb.verticalMax;
+  });
+
+  readonly activeGutterWidth = computed(() => {
+    const totalLines = this.activeTotalLogicalLines();
+    const charWidth = this.charMetricsWidth();
+    return computeGutterWidth(totalLines, charWidth);
+  });
+
+  readonly activeGutterNumbers = computed<(number | null)[]>(() => {
+    const rows = this.activeViewRows();
+    if (!rows || rows.length === 0) return [];
+    const state = this.activeTabViewState();
+    if (!state) return [];
+    if (!this.wrapMode()) {
+      return computeNonWrappedLineNumbers(state.startLine, rows.length);
+    }
+    const content = this.activeResponseContent();
+    const dims = this.viewDimensions();
+    if (!dims) return [];
+    return computeWrappedGutterNumbers(content, dims.colCount, state.startLine, state.characterOffset);
+  });
+
   readonly verticalThumbRatio = computed(() => {
     const sb = this.activeScrollbarState();
     const dims = this.viewDimensions();
@@ -117,6 +166,22 @@ export class ShellStateService implements OnDestroy {
     if (!dims || sb.disabled || sb.verticalMax <= dims.rowCount) return 0;
     const maxScroll = sb.verticalMax - dims.rowCount;
     if (maxScroll <= 0) return 0;
+
+    if (this.wrapMode()) {
+      // In wrapped mode, compute current visual row index
+      const lengths = this.lineLengths();
+      let visualRowIndex = 0;
+      for (let i = 0; i < state.startLine; i++) {
+        const len = lengths.get(i) ?? 0;
+        visualRowIndex += len === 0 ? 1 : Math.ceil(len / dims.colCount);
+      }
+      // Add visual rows within current line from characterOffset
+      if (state.characterOffset > 0) {
+        visualRowIndex += Math.floor(state.characterOffset / dims.colCount);
+      }
+      return visualRowIndex / maxScroll;
+    }
+
     return state.startLine / maxScroll;
   });
 
@@ -139,6 +204,7 @@ export class ShellStateService implements OnDestroy {
   private scanCompleteSubscription: SubscriptionHandle | undefined;
   private getViewSubscription: SubscriptionHandle | undefined;
   private scrollInfoSubscription: SubscriptionHandle | undefined;
+  private lineLengthsSubscription: SubscriptionHandle | undefined;
 
   // --- Scrollbar polling state ---
   private scrollPollTimer: ReturnType<typeof setInterval> | null = null;
@@ -201,12 +267,15 @@ export class ShellStateService implements OnDestroy {
       updatedStates.set(viewSessionId, {
         scanComplete: false,
         viewRows: initialRows,
+        rawResponseContent: null,
         errorMessage: null,
         pendingCorrelationId: null,
         deferred: false,
         scrollbarState: { verticalMax: 0, horizontalMax: 0, disabled: true },
         startLine: 0,
         startCol: 0,
+        characterOffset: 0,
+        needsRefresh: false,
       });
       this.tabViewStates.set(updatedStates);
 
@@ -229,6 +298,11 @@ export class ShellStateService implements OnDestroy {
     this.scrollInfoSubscription = this.messageBus.subscribe('get-scroll-info', (msg: InboundMessage) => {
       this.handleScrollInfoResponse(msg);
     });
+
+    // Subscribe to get-line-lengths responses
+    this.lineLengthsSubscription = this.messageBus.subscribe('get-line-lengths', (msg: InboundMessage) => {
+      this.handleLineLengthsResponse(msg);
+    });
   }
 
   ngOnDestroy(): void {
@@ -236,6 +310,7 @@ export class ShellStateService implements OnDestroy {
     this.scanCompleteSubscription?.unsubscribe();
     this.getViewSubscription?.unsubscribe();
     this.scrollInfoSubscription?.unsubscribe();
+    this.lineLengthsSubscription?.unsubscribe();
     this.stopScrollPolling();
   }
 
@@ -292,11 +367,32 @@ export class ShellStateService implements OnDestroy {
       this.stopScrollPolling();
     }
 
-    // Only trigger a view request if the new tab does NOT already have cached rows.
-    // Tabs with cached viewRows already display correct content (Req 5.5, 7.5);
-    // thumb position restores automatically via computed signals reading startLine/startCol.
+    // Handle needsRefresh tabs (Req 4.5, 5.5): when wrap mode was toggled while
+    // this tab was inactive, it needs a fresh view request in the current mode.
     const newState2 = newTab ? this.tabViewStates().get(newTab.viewSessionId) : null;
-    if (!newState2?.viewRows) {
+    if (newState2?.needsRefresh) {
+      // Clear needsRefresh flag
+      const updated = new Map(this.tabViewStates());
+      updated.set(newTab!.viewSessionId, { ...newState2, needsRefresh: false });
+      this.tabViewStates.set(updated);
+
+      // Send appropriate view request based on current wrap mode
+      if (this.wrapMode()) {
+        this.sendWrappedViewRequest(newTab!.viewSessionId);
+        this.requestLineLengths(newTab!.viewSessionId);
+      } else {
+        this.sendStandardViewRequest(newTab!.viewSessionId);
+      }
+    } else if (this.wrapMode() && newTab) {
+      // Tab activated in wrapped mode — request line lengths for scrollbar
+      this.requestLineLengths(newTab.viewSessionId);
+      if (!newState2?.viewRows) {
+        this.tryTriggerViewRequest();
+      }
+    } else if (!newState2?.viewRows) {
+      // Only trigger a view request if the new tab does NOT already have cached rows.
+      // Tabs with cached viewRows already display correct content (Req 5.5, 7.5);
+      // thumb position restores automatically via computed signals reading startLine/startCol.
       this.tryTriggerViewRequest();
     }
   }
@@ -363,6 +459,46 @@ export class ShellStateService implements OnDestroy {
     this.tryTriggerViewRequest();
   }
 
+  updateCharMetricsWidth(width: number): void {
+    this.charMetricsWidth.set(width);
+  }
+
+  toggleWrapMode(): void {
+    const newMode = !this.wrapMode();
+    this.wrapMode.set(newMode);
+
+    const tab = this.activeTab();
+    if (!tab) return; // No active tab — just update state, no request
+
+    // Reset Start_Col to 0 for active tab
+    this.updateScrollPosition(tab.viewSessionId, undefined, 0);
+
+    // Mark all non-active tabs as needing refresh
+    const states = this.tabViewStates();
+    const updated = new Map(states);
+    for (const [sessionId, state] of updated.entries()) {
+      if (sessionId !== tab.viewSessionId) {
+        updated.set(sessionId, { ...state, needsRefresh: true });
+      }
+    }
+
+    // Reset characterOffset for active tab
+    const activeState = updated.get(tab.viewSessionId);
+    if (activeState) {
+      updated.set(tab.viewSessionId, { ...activeState, characterOffset: 0 });
+    }
+    this.tabViewStates.set(updated);
+
+    // Send appropriate view request for active tab
+    if (newMode) {
+      this.sendWrappedViewRequest(tab.viewSessionId);
+      // Request line lengths for wrapped-mode scrollbar computation
+      this.requestLineLengths(tab.viewSessionId);
+    } else {
+      this.sendStandardViewRequest(tab.viewSessionId);
+    }
+  }
+
   // --- Private: scan-complete handling ---
 
   private handleScanComplete(viewSessionId: string): void {
@@ -385,12 +521,15 @@ export class ShellStateService implements OnDestroy {
       updated.set(viewSessionId, {
         scanComplete: true,
         viewRows: null,
+        rawResponseContent: null,
         errorMessage: null,
         pendingCorrelationId: null,
         deferred: false,
         scrollbarState: { verticalMax: 0, horizontalMax: 0, disabled: true },
         startLine: 0,
         startCol: 0,
+        characterOffset: 0,
+        needsRefresh: false,
       });
       this.tabViewStates.set(updated);
     }
@@ -428,21 +567,36 @@ export class ShellStateService implements OnDestroy {
     const updated = new Map(states);
 
     if (msg.payload.startsWith(ShellStateService.ERROR_PREFIX)) {
-      // Error response: store error, keep previous viewRows visible (Req 8.4)
+      // Error response: store error, keep previous viewRows visible (Req 4.7, 5.6)
       updated.set(matchedSessionId, {
         ...currentState,
         errorMessage: msg.payload,
         pendingCorrelationId: null,
       });
     } else {
-      // Success response: split payload by \n and store in viewRows, clear errorMessage
-      const rows = msg.payload.split('\n');
-      updated.set(matchedSessionId, {
-        ...currentState,
-        viewRows: rows,
-        errorMessage: null,
-        pendingCorrelationId: null,
-      });
+      // Success response: split payload and store in viewRows, clear errorMessage
+      const dims = this.viewDimensions();
+      if (this.wrapMode() && dims) {
+        // Wrapped mode: split response content into visual rows at Col_Count boundaries
+        const rows = splitIntoVisualRows(msg.payload, dims.colCount);
+        updated.set(matchedSessionId, {
+          ...currentState,
+          viewRows: rows,
+          rawResponseContent: msg.payload,
+          errorMessage: null,
+          pendingCorrelationId: null,
+        });
+      } else {
+        // Non-wrapped mode: split payload by \n
+        const rows = msg.payload.split('\n');
+        updated.set(matchedSessionId, {
+          ...currentState,
+          viewRows: rows,
+          rawResponseContent: null,
+          errorMessage: null,
+          pendingCorrelationId: null,
+        });
+      }
     }
 
     this.tabViewStates.set(updated);
@@ -479,19 +633,19 @@ export class ShellStateService implements OnDestroy {
     // 7. If pendingCorrelationId is non-null → return (duplicate suppression)
     if (state.pendingCorrelationId !== null) return;
 
-    // 8. Send "get-view" with payload: viewSessionId\n0\n0\nrowCount\ncolCount
-    const payload = `${tab.viewSessionId}\n0\n0\n${dims.rowCount}\n${dims.colCount}`;
-    const correlationId = this.messageBus.send('get-view', payload);
+    // 8. Clear deferred flag before sending
+    if (state.deferred) {
+      const updated = new Map(states);
+      updated.set(tab.viewSessionId, { ...state, deferred: false });
+      this.tabViewStates.set(updated);
+    }
 
-    // 9. Store the correlationId in the TabViewState's pendingCorrelationId
-    // 10. Clear deferred flag
-    const updated = new Map(this.tabViewStates());
-    updated.set(tab.viewSessionId, {
-      ...state,
-      pendingCorrelationId: correlationId,
-      deferred: false,
-    });
-    this.tabViewStates.set(updated);
+    // 9. Dispatch wrapped or standard request based on wrapMode
+    if (this.wrapMode()) {
+      this.sendWrappedViewRequest(tab.viewSessionId);
+    } else {
+      this.sendStandardViewRequest(tab.viewSessionId);
+    }
   }
 
   // --- Private: scrollbar polling ---
@@ -549,6 +703,11 @@ export class ShellStateService implements OnDestroy {
       if (scanState === 'Failed' || scanState === 'Cancelled') {
         this.updateTabScrollbar(sessionId, { verticalMax: 0, horizontalMax: 0, disabled: true });
       }
+
+      // Request line lengths for wrapped-mode scrollbar computation
+      if (scanState !== 'Failed' && scanState !== 'Cancelled') {
+        this.requestLineLengths(sessionId);
+      }
     }
   }
 
@@ -562,9 +721,101 @@ export class ShellStateService implements OnDestroy {
     this.tabViewStates.set(updated);
   }
 
+  // --- Private: get-line-lengths handling ---
+
+  private handleLineLengthsResponse(msg: InboundMessage): void {
+    const payload = msg.payload;
+    if (payload.startsWith('ERROR:')) return;
+
+    // Empty response means no lines
+    if (payload === '') {
+      this.lineLengths.set(new Map());
+      this.totalLogicalLines.set(0);
+      return;
+    }
+
+    // Parse newline-delimited integer char lengths
+    const fields = payload.split('\n');
+    const lengths = new Map<number, number>();
+    for (let i = 0; i < fields.length; i++) {
+      const val = parseInt(fields[i], 10);
+      if (!isNaN(val)) {
+        lengths.set(i, val);
+      }
+    }
+    this.lineLengths.set(lengths);
+    this.totalLogicalLines.set(fields.length);
+
+    // Recompute scrollbar verticalMax for wrapped mode
+    this.updateWrappedScrollbarMax();
+  }
+
+  /** Send get-line-lengths request for the given session */
+  requestLineLengths(sessionId: string): void {
+    this.messageBus.send('get-line-lengths', sessionId);
+  }
+
+  /** Recompute and update scrollbar verticalMax when wrapMode is on and lineLengths are available */
+  private updateWrappedScrollbarMax(): void {
+    if (!this.wrapMode()) return;
+
+    const tab = this.activeTab();
+    if (!tab) return;
+
+    const state = this.tabViewStates().get(tab.viewSessionId);
+    if (!state) return;
+
+    const dims = this.viewDimensions();
+    if (!dims) return;
+
+    const lengths = this.lineLengths();
+    if (lengths.size === 0) return;
+
+    // Convert Map to array for computeWrappedScrollbarMax
+    const lengthsArray: number[] = [];
+    for (let i = 0; i < this.totalLogicalLines(); i++) {
+      lengthsArray.push(lengths.get(i) ?? 0);
+    }
+
+    const wrappedVerticalMax = computeWrappedScrollbarMax(lengthsArray, dims.colCount);
+    const horizontalMax = state.scrollbarState.horizontalMax;
+    const disabled = wrappedVerticalMax === 0 && horizontalMax === 0;
+
+    this.updateTabScrollbar(tab.viewSessionId, {
+      verticalMax: wrappedVerticalMax,
+      horizontalMax,
+      disabled,
+    });
+  }
+
   // --- Scroll action methods ---
 
   handleArrowKey(direction: 'up' | 'down' | 'left' | 'right'): void {
+    if (this.wrapMode() && (direction === 'up' || direction === 'down')) {
+      const tab = this.activeTab();
+      if (!tab) return;
+      const state = this.tabViewStates().get(tab.viewSessionId);
+      if (!state) return;
+      const dims = this.viewDimensions();
+      if (!dims) return;
+
+      const steps = direction === 'down' ? ARROW_STEP : -ARROW_STEP;
+      const result = scrollByVisualRows(
+        { startLine: state.startLine, characterOffset: state.characterOffset },
+        steps, dims.colCount, this.lineLengths(), this.totalLogicalLines()
+      );
+
+      if (!result.positionChanged) return;
+
+      // Update state
+      const updated = new Map(this.tabViewStates());
+      updated.set(tab.viewSessionId, { ...state, startLine: result.startLine, characterOffset: result.characterOffset });
+      this.tabViewStates.set(updated);
+
+      this.sendWrappedViewRequest(tab.viewSessionId);
+      return;
+    }
+
     const tab = this.activeTab();
     if (!tab) return;
     const state = this.tabViewStates().get(tab.viewSessionId);
@@ -602,6 +853,31 @@ export class ShellStateService implements OnDestroy {
   }
 
   handleWheel(deltaY: number, deltaX: number): void {
+    if (this.wrapMode()) {
+      const tab = this.activeTab();
+      if (!tab) return;
+      const state = this.tabViewStates().get(tab.viewSessionId);
+      if (!state) return;
+      const dims = this.viewDimensions();
+      if (!dims) return;
+
+      const steps = deltaY > 0 ? WHEEL_STEP : -WHEEL_STEP;
+      const result = scrollByVisualRows(
+        { startLine: state.startLine, characterOffset: state.characterOffset },
+        steps, dims.colCount, this.lineLengths(), this.totalLogicalLines()
+      );
+
+      if (!result.positionChanged) return;
+
+      // Update state
+      const updated = new Map(this.tabViewStates());
+      updated.set(tab.viewSessionId, { ...state, startLine: result.startLine, characterOffset: result.characterOffset });
+      this.tabViewStates.set(updated);
+
+      this.sendWrappedViewRequest(tab.viewSessionId);
+      return;
+    }
+
     const tab = this.activeTab();
     if (!tab) return;
     const state = this.tabViewStates().get(tab.viewSessionId);
@@ -741,6 +1017,57 @@ export class ShellStateService implements OnDestroy {
       startCol,
       pendingCorrelationId: correlationId,
     });
+    this.tabViewStates.set(updated);
+  }
+
+  // --- Private: standard (non-wrapped) view request ---
+
+  private sendStandardViewRequest(sessionId: string): void {
+    const states = this.tabViewStates();
+    const state = states.get(sessionId);
+    if (!state) return;
+
+    // Latest-wins: cancel pending request if exists
+    if (state.pendingCorrelationId) {
+      this.messageBus.cancel(state.pendingCorrelationId);
+    }
+
+    const dims = this.viewDimensions();
+    if (!dims) return;
+
+    const payload = `${sessionId}\n${state.startLine}\n${state.startCol}\n${dims.rowCount}\n${dims.colCount}`;
+    const correlationId = this.messageBus.send('get-view', payload);
+
+    const updated = new Map(this.tabViewStates());
+    updated.set(sessionId, { ...state, pendingCorrelationId: correlationId });
+    this.tabViewStates.set(updated);
+  }
+
+  // --- Private: wrapped-mode view request ---
+
+  private sendWrappedViewRequest(sessionId: string): void {
+    const states = this.tabViewStates();
+    const state = states.get(sessionId);
+    if (!state) return;
+
+    // Latest-wins: cancel pending request if exists
+    if (state.pendingCorrelationId) {
+      this.messageBus.cancel(state.pendingCorrelationId);
+    }
+
+    const dims = this.viewDimensions();
+    if (!dims) return;
+
+    const characterCount = dims.colCount * dims.rowCount;
+    // Cap at INT32_MAX
+    const cappedCount = Math.min(characterCount, 2_147_483_647);
+
+    // Payload: viewSessionId\nW\nstartLine\ncharacterOffset\ncharacterCount
+    const payload = `${sessionId}\nW\n${state.startLine}\n${state.characterOffset}\n${cappedCount}`;
+    const correlationId = this.messageBus.send('get-view', payload);
+
+    const updated = new Map(this.tabViewStates());
+    updated.set(sessionId, { ...state, pendingCorrelationId: correlationId });
     this.tabViewStates.set(updated);
   }
 

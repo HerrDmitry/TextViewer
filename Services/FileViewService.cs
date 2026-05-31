@@ -162,6 +162,138 @@ public sealed class FileViewService : IDisposable
         return Task.FromResult(Result<ViewResult, ViewError>.Success(new ViewResult(rows)));
     }
 
+    /// <summary>
+    /// Extracts a character-count-based slice for wrapped-mode display.
+    /// Reads starting from the specified line at the specified character offset,
+    /// collecting up to characterCount content characters. Newline delimiters
+    /// are NOT counted toward characterCount but ARE included in the output.
+    /// </summary>
+    public Task<Result<string, ViewError>> GetWrappedViewAsync(
+        int startLine, int characterOffset, int characterCount,
+        CancellationToken cancellationToken = default)
+    {
+        // Validate parameters
+        if (startLine < 0)
+            return Task.FromResult(Result<string, ViewError>.Failure(
+                new ViewError(ViewErrorCode.InvalidParameter,
+                    "ERROR: startLine out of range")));
+        if (characterOffset < 0)
+            return Task.FromResult(Result<string, ViewError>.Failure(
+                new ViewError(ViewErrorCode.InvalidParameter,
+                    "ERROR: characterOffset out of range")));
+        if (characterCount < 1)
+            return Task.FromResult(Result<string, ViewError>.Failure(
+                new ViewError(ViewErrorCode.InvalidParameter,
+                    "ERROR: characterCount out of range")));
+
+        // Check cancellation (linked: service-level + per-request)
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+            _serviceCancellationToken, cancellationToken);
+        var ct = linkedCts.Token;
+        ct.ThrowIfCancellationRequested();
+
+        // Check if FileIndex is in Failed state before opening handle
+        if (_fileIndex.State == ScanState.Failed)
+            return Task.FromResult(Result<string, ViewError>.Failure(
+                new ViewError(ViewErrorCode.FileNotAccessible,
+                    $"File index failed: {_filePath}")));
+
+        // Snapshot line count (volatile read) and scan state
+        var scannedLines = _fileIndex.Index.LineCount;
+        var scanComplete = _fileIndex.State >= ScanState.QuickScanComplete
+                           && _fileIndex.State < ScanState.Failed;
+
+        // Start line beyond file
+        if (startLine >= scannedLines)
+            return Task.FromResult(Result<string, ViewError>.Success(""));
+
+        // Scan in progress and line beyond scanned range
+        if (!scanComplete && startLine >= scannedLines)
+            return Task.FromResult(Result<string, ViewError>.Success(""));
+
+        var result = new StringBuilder();
+        int contentCharsCollected = 0;
+        int currentLine = startLine;
+        int currentOffset = characterOffset;
+
+        FileStream? stream = null;
+        try
+        {
+            stream = new FileStream(_filePath, FileMode.Open,
+                FileAccess.Read, FileShare.ReadWrite);
+            var encoding = _fileIndex.Encoding;
+            var bomByteLength = _fileIndex.BomByteLength;
+
+            while (contentCharsCollected < characterCount
+                   && currentLine < scannedLines)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                // Read and decode the current line
+                var byteOffset = _fileIndex.Index.GetByteOffset(currentLine);
+                var byteLen = (int)_fileIndex.Index.GetByteLength(currentLine);
+                stream.Seek((long)byteOffset, SeekOrigin.Begin);
+                var lineBytes = new byte[byteLen];
+                int totalRead = 0;
+                while (totalRead < byteLen)
+                {
+                    int read = stream.Read(lineBytes, totalRead, byteLen - totalRead);
+                    if (read == 0) break;
+                    totalRead += read;
+                }
+
+                int bomSkip = (currentLine == 0) ? bomByteLength : 0;
+                // Decode full line content (no char limit needed here)
+                var (content, delimiter) = DecodeUpTo(
+                    lineBytes, totalRead, encoding, bomSkip, int.MaxValue);
+
+                // Handle offset overflow: skip lines whose content is shorter
+                if (currentOffset >= content.Length)
+                {
+                    currentOffset -= content.Length;
+                    currentLine++;
+                    continue;
+                }
+
+                // Extract characters from currentOffset
+                int available = content.Length - currentOffset;
+                int toTake = Math.Min(available,
+                    characterCount - contentCharsCollected);
+                result.Append(content, currentOffset, toTake);
+                contentCharsCollected += toTake;
+
+                // If we consumed the entire remaining line content, append delimiter
+                if (currentOffset + toTake >= content.Length
+                    && delimiter.Length > 0)
+                {
+                    result.Append(delimiter);
+                }
+
+                currentLine++;
+                currentOffset = 0;
+            }
+        }
+        catch (FileNotFoundException)
+        {
+            return Task.FromResult(Result<string, ViewError>.Failure(
+                new ViewError(ViewErrorCode.FileNotAccessible,
+                    $"File not accessible: {_filePath}")));
+        }
+        catch (IOException)
+        {
+            return Task.FromResult(Result<string, ViewError>.Failure(
+                new ViewError(ViewErrorCode.IoError,
+                    $"Read error: {_filePath}")));
+        }
+        finally
+        {
+            stream?.Dispose();
+        }
+
+        return Task.FromResult(Result<string, ViewError>.Success(
+            result.ToString()));
+    }
+
     public void Dispose()
     {
         _fileIndex.Dispose();

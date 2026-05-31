@@ -19,6 +19,8 @@ export interface TabViewState {
   scanComplete: boolean;
   /** Cached rows from last successful get-view response */
   viewRows: string[] | null;
+  /** Raw response content string cached for gutter number computation in wrapped mode */
+  rawResponseContent: string | null;
   /** Error message from last get-view response */
   errorMessage: string | null;
   /** Non-null while awaiting a get-view response */
@@ -31,6 +33,10 @@ export interface TabViewState {
   startLine: number;
   /** Zero-based index of the first visible column (horizontal scroll position) */
   startCol: number;
+  /** Character offset within startLine for wrapped-mode scrolling (0 when wrap off) */
+  characterOffset: number;
+  /** Whether this tab needs a content refresh (set when wrap mode toggled while inactive) */
+  needsRefresh: boolean;
 }
 
 /** Transient state during scrollbar thumb drag */
