@@ -12,8 +12,10 @@ public sealed class LineIndex
 {
     private readonly object _writeLock = new();
     private SegmentDirectory _segments = new();
+    private ulong[] _segmentPrefixBytes = [];
     private volatile int _lineCount;
     private volatile int _charLengthsWrittenUpTo;
+    private long _totalByteLength;
     private long _maxByteLength;
     private long _maxCharLength;
 
@@ -66,13 +68,21 @@ public sealed class LineIndex
         if (lineIndex < 0 || lineIndex > _lineCount)
             throw new ArgumentOutOfRangeException(nameof(lineIndex));
 
-        ulong offset = 0;
-        for (int i = 0; i < lineIndex; i++)
+        if (lineIndex == 0)
+            return 0;
+
+        if (lineIndex == _lineCount)
+            return (ulong)Interlocked.Read(ref _totalByteLength);
+
+        var (segment, segmentIndex) = _segments.FindSegmentWithIndex(lineIndex);
+        ulong offset = _segmentPrefixBytes[segmentIndex];
+        int offsetInSegment = lineIndex - segment.StartLine;
+
+        for (int i = 0; i < offsetInSegment; i++)
         {
-            var segment = _segments.FindSegment(i);
-            int offsetInSegment = i - segment.StartLine;
-            offset += segment.GetByteLength(offsetInSegment);
+            offset += segment.GetByteLength(i);
         }
+
         return offset;
     }
 
@@ -91,13 +101,39 @@ public sealed class LineIndex
         lock (_writeLock)
         {
             int startLine = _lineCount;
+            int oldSegmentCount = _segments.Segments.Count;
+            ulong baseOffsetBeforeAppend = (ulong)_totalByteLength;
             _segments.Append(byteLengths, startLine);
+
+            var segments = _segments.Segments;
+            if (segments.Count > oldSegmentCount)
+            {
+                var updatedPrefixes = new ulong[segments.Count];
+                if (_segmentPrefixBytes.Length > 0)
+                    Array.Copy(_segmentPrefixBytes, updatedPrefixes, _segmentPrefixBytes.Length);
+
+                ulong runningOffset = baseOffsetBeforeAppend;
+                for (int i = oldSegmentCount; i < segments.Count; i++)
+                {
+                    updatedPrefixes[i] = runningOffset;
+
+                    var segment = segments[i];
+                    for (int j = 0; j < segment.Count; j++)
+                    {
+                        runningOffset += segment.GetByteLength(j);
+                    }
+                }
+
+                _segmentPrefixBytes = updatedPrefixes;
+            }
 
             // Track running maximum byte length.
             foreach (var byteLen in byteLengths)
             {
                 if ((long)byteLen > _maxByteLength)
                     _maxByteLength = (long)byteLen;
+
+                _totalByteLength += (long)byteLen;
             }
 
             // Publish: increment _lineCount AFTER segment data is fully written.
@@ -172,8 +208,10 @@ public sealed class LineIndex
         {
             _lineCount = 0;
             _charLengthsWrittenUpTo = 0;
+            _totalByteLength = 0;
             _maxByteLength = 0;
             _maxCharLength = 0;
+            _segmentPrefixBytes = [];
             _segments.Clear();
         }
     }

@@ -128,3 +128,15 @@ File Index feature. When a user selects a file via the Open File Dialog, the app
 7. WHEN a new file is selected, THE caller SHALL signal cancellation on the previous FileIndex's CancellationToken, dispose it, then create a new FileIndex instance
 8. WHEN a new file is selected for scanning, THE caller SHALL clear all metrics from the previous file before displaying the scanning indicator for the new file
 9. IF the caller observes ScanState = Failed, THEN THE caller SHALL display the FileIndex Error field in the main content area, replacing the default "hello world" text
+
+### Requirement 10: Byte Offset Query Correctness and Performance
+
+**User Story:** As a user, I want line-to-byte navigation to stay accurate and responsive even on very large files, so that scrolling and viewport updates remain smooth.
+
+#### Acceptance Criteria
+
+1. WHEN `GetByteOffset(lineIndex)` is called for any valid line index, THEN THE Line_Index SHALL return exactly the cumulative sum of `Byte_Length` values for lines `[0..lineIndex-1]`
+2. WHEN `GetByteOffset(0)` and `GetByteOffset(LineCount)` are called, THEN THE Line_Index SHALL return `0` and total file size in bytes respectively
+3. WHEN `GetByteOffset(lineIndex)` is called for large line indices near end-of-file, THEN THE Line_Index SHALL compute the result using segment-indexed prefix metadata and SHALL NOT perform full per-line accumulation from line `0`
+4. WHEN `GetByteOffset` is called repeatedly for nearby line indices, THEN THE Line_Index SHALL reuse segment-locality information to avoid repeating global prefix recomputation
+5. WHEN byte offsets are optimized, THEN existing `GetByteLength`, `GetCharLength`, scan publication ordering, and `Clear()` reset behavior SHALL remain unchanged
