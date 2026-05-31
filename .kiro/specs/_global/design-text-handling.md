@@ -101,7 +101,7 @@ sequenceDiagram
         Bridge->>MBH: WebMessageReceived
         MBH->>FVS: ScanState
         MBH->>LI: LineCount
-        MBH->>LI: iterate → max byte_length, max char_length
+        MBH->>LI: MaxByteLength, MaxCharLength (O(1) cached)
         MBH-->>MBC: response (scanState\nlineCount\nmaxByteLength\nmaxCharLength)
         SSS->>SSS: update scrollbar signals
         TVA->>TVA: render scrollbar max values
@@ -157,7 +157,7 @@ stateDiagram-v2
 
 13. **Per-tab polling lifecycle** — Polling tied to active tab. On tab switch, polling stops for old tab and starts for new tab if its scan still in progress. Prevents background polling for inactive tabs.
 
-14. **Backend iterates LineIndex for max values** — FileIndex/LineIndex does not expose MaxByteLength or MaxCharLength directly. "get-scroll-info" handler iterates all lines up to LineCount to compute running max. For large files during scan, bounded by lines discovered so far.
+14. **Backend uses cached LineIndex max values** — LineIndex exposes `MaxByteLength` and `MaxCharLength` properties (O(1) reads, tracked incrementally during scan). "get-scroll-info" handler reads these directly — no iteration required.
 
 15. **ScrollInfo stored per-tab in TabViewState** — Scrollbar max values cached in TabViewState so tab switches restore scrollbar state instantly without backend round-trip.
 
@@ -637,15 +637,9 @@ messageBus.RegisterHandler("get-scroll-info", (correlationId, payload) =>
     var lineIndex = service.LineIndex;
     var lineCount = lineIndex.LineCount;
 
-    ulong maxByteLength = 0, maxCharLength = 0;
-    for (int i = 0; i < lineCount; i++)
-    {
-        var byteLen = lineIndex.GetByteLength(i);
-        if (byteLen > maxByteLength) maxByteLength = byteLen;
-        var charLen = lineIndex.GetCharLength(i);
-        if (charLen.HasValue && charLen.Value > maxCharLength)
-            maxCharLength = charLen.Value;
-    }
+    // O(1) cached max values from LineIndex
+    ulong maxByteLength = lineIndex.MaxByteLength;
+    ulong maxCharLength = lineIndex.MaxCharLength ?? 0;
 
     return Task.FromResult<string?>(
         $"{scanState}\n{lineCount}\n{maxByteLength}\n{maxCharLength}");
@@ -867,7 +861,7 @@ computeCharMetrics():
 | get-scroll-info response parse failure | Frontend | Discard silently — scrollbar retains previous values |
 | get-scroll-info response after tab closed | Frontend | Discard — TabViewState removed, polling stopped |
 | Scan Failed/Cancelled during polling | Frontend | Stop polling, set scrollbar max = 0, disable |
-| LineIndex iteration during active write | Backend | Safe — reads only committed lines up to volatile LineCount |
+| LineIndex max reads during active write | Backend | Safe — MaxByteLength/MaxCharLength use Interlocked.Read; values monotonically increase |
 
 ## Testing Strategy
 

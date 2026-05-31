@@ -14,9 +14,17 @@ public sealed class LineIndex
     private SegmentDirectory _segments = new();
     private volatile int _lineCount;
     private volatile int _charLengthsWrittenUpTo;
+    private long _maxByteLength;
+    private long _maxCharLength;
 
     /// <summary>Total lines indexed (visible once Quick_Scan appends).</summary>
     public int LineCount => _lineCount;
+
+    /// <summary>Maximum byte length across all indexed lines. O(1).</summary>
+    public ulong MaxByteLength => (ulong)Interlocked.Read(ref _maxByteLength);
+
+    /// <summary>Maximum char length across all lines with char data written, or null if none written yet. O(1).</summary>
+    public ulong? MaxCharLength => _charLengthsWrittenUpTo == 0 ? null : (ulong)Interlocked.Read(ref _maxCharLength);
 
     /// <summary>Returns byte length for a given line (0-based). O(log N) lookup.</summary>
     public ulong GetByteLength(int lineIndex)
@@ -84,6 +92,14 @@ public sealed class LineIndex
         {
             int startLine = _lineCount;
             _segments.Append(byteLengths, startLine);
+
+            // Track running maximum byte length.
+            foreach (var byteLen in byteLengths)
+            {
+                if ((long)byteLen > _maxByteLength)
+                    _maxByteLength = (long)byteLen;
+            }
+
             // Publish: increment _lineCount AFTER segment data is fully written.
             // volatile write ensures visibility ordering.
             _lineCount = startLine + byteLengths.Length;
@@ -129,6 +145,10 @@ public sealed class LineIndex
                 break;
         }
 
+        // Track running maximum char length.
+        if ((long)charLength > _maxCharLength)
+            _maxCharLength = (long)charLength;
+
         // Publish: increment _charLengthsWrittenUpTo AFTER the Interlocked write completes.
         // volatile write ensures readers see the char-length value before seeing the counter update.
         _charLengthsWrittenUpTo = lineIndex + 1;
@@ -152,6 +172,8 @@ public sealed class LineIndex
         {
             _lineCount = 0;
             _charLengthsWrittenUpTo = 0;
+            _maxByteLength = 0;
+            _maxCharLength = 0;
             _segments.Clear();
         }
     }
