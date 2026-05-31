@@ -6,6 +6,7 @@
 #[[file:.kiro/specs/_global/requirements-viewer-ui-shell.md]]
 #[[file:.kiro/specs/_global/requirements-text-handling.md]]
 #[[file:.kiro/specs/_global/requirements-scroll-navigation.md]]
+#[[file:.kiro/specs/_global/requirements-line-wrap-numbers.md]]
 
 ## Introduction
 
@@ -26,6 +27,9 @@ TextViewer is a cross-platform desktop application for viewing text content. Thi
 - **Initial_View**: Text rows returned proactively in open-file response after 500ms scan delay (see `requirements-text-handling.md`)
 - **Start_Line**: Zero-based index of first visible line in viewport; determines vertical scroll position (see `requirements-scroll-navigation.md`)
 - **Start_Col**: Zero-based index of first visible column in viewport; determines horizontal scroll position (see `requirements-scroll-navigation.md`)
+- **Line_Number_Gutter**: Fixed-width column left of text content displaying 1-based line numbers (see `requirements-line-wrap-numbers.md`)
+- **Wrap_Mode**: Display mode where long lines hard-wrap at Col_Count boundary (see `requirements-line-wrap-numbers.md`)
+- **Visual_Row**: Single rendered row; in wrapped mode a Logical_Line may produce multiple (see `requirements-line-wrap-numbers.md`)
 
 ## Requirements
 
@@ -135,3 +139,19 @@ Full spec in `requirements-scroll-navigation.md`. Summary:
 5. THE frontend SHALL use latest-wins cancellation for scroll-triggered view requests (cancel pending, send new)
 6. THE frontend SHALL store Start_Line/Start_Col per tab and restore on tab switch without new view request
 7. THE frontend SHALL keep previous rows visible while scroll request pending; on error, keep rows and show error separately
+
+### Requirement 9: Line Wrap & Line Numbers
+
+**User Story:** As a user, I want line numbers and wrap mode so I can identify lines and read long lines without horizontal scrolling.
+
+#### Acceptance Criteria
+
+Full spec in `requirements-line-wrap-numbers.md`. Summary:
+
+1. THE Text_View_Area SHALL render a Line_Number_Gutter with backend-provided 1-based line numbers
+2. THE backend SHALL include per-row line numbers in both non-wrapped (`{lineNum}\t{content}`) and wrapped (`L:` header) response formats
+3. THE Status_Bar SHALL provide a Wrap_Checkbox toggling hard-wrap at Col_Count boundary
+4. THE frontend SHALL request wrapped content via 6-field format including colCount
+5. THE frontend SHALL split wrapped response content into Visual_Rows at Col_Count boundaries
+6. THE frontend SHALL scroll wrapped mode by Visual_Row (Character_Offset increments of Col_Count)
+7. THE Col_Count computation SHALL subtract Gutter_Width from available pixel width

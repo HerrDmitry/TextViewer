@@ -54,11 +54,15 @@ jest.mock('../shell-state.service', () => ({
     activeViewError = () => mockActiveViewError;
     isViewPending = () => mockIsViewPending;
     activeScrollbarState = () => null;
+    activeGutterWidth = () => 0;
+    activeGutterNumbers = () => [];
+    wrapMode = () => false;
     verticalThumbRatio = () => 1;
     verticalThumbFraction = () => 0;
     horizontalThumbRatio = () => 1;
     horizontalThumbFraction = () => 0;
     updateViewDimensions = mockUpdateViewDimensions;
+    updateCharMetricsWidth = jest.fn();
     handleWheel = jest.fn();
     handleArrowKey = jest.fn();
     handleVerticalDragStart = jest.fn();

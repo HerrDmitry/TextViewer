@@ -1,3 +1,7 @@
 <div class="status-bar">
   <span class="file-path">{{ filePath() }}</span>
+  <label class="wrap-checkbox">
+    <input type="checkbox" [checked]="wrapMode()" (change)="onWrapToggle()" />
+    Wrap
+  </label>
 </div>

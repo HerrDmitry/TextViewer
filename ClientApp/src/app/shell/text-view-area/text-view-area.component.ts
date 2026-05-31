@@ -12,6 +12,7 @@ export class TextViewAreaComponent implements AfterViewInit, OnDestroy {
   private readonly state = inject(ShellStateService);
   private readonly el = inject(ElementRef);
 
+  @ViewChild('gutterEl') gutterEl?: ElementRef<HTMLElement>;
   @ViewChild('verticalTrack') verticalTrack!: ElementRef<HTMLElement>;
   @ViewChild('horizontalTrack') horizontalTrack!: ElementRef<HTMLElement>;
 
@@ -21,6 +22,9 @@ export class TextViewAreaComponent implements AfterViewInit, OnDestroy {
   readonly viewError = this.state.activeViewError;
   readonly isViewPending = this.state.isViewPending;
   readonly scrollbarState = this.state.activeScrollbarState;
+  readonly gutterWidth = this.state.activeGutterWidth;
+  readonly gutterNumbers = this.state.activeGutterNumbers;
+  readonly wrapMode = this.state.wrapMode;
 
   readonly verticalThumbRatio = this.state.verticalThumbRatio;
   readonly verticalThumbFraction = this.state.verticalThumbFraction;
@@ -68,7 +72,14 @@ export class TextViewAreaComponent implements AfterViewInit, OnDestroy {
 
     const charMetrics = this.computeCharMetrics();
     const rowCount = Math.max(1, Math.floor(pixelHeight / charMetrics.height));
-    const colCount = Math.max(1, Math.floor(pixelWidth / charMetrics.width));
+
+    // Subtract gutter width from available width for Col_Count (Req 9.1, 9.3, 9.4)
+    const gutterEl = this.gutterEl?.nativeElement;
+    const gutterWidth = gutterEl ? gutterEl.clientWidth : 0;
+    const colCount = Math.max(1, Math.floor((pixelWidth - gutterWidth) / charMetrics.width));
+
+    // Report char metrics width for gutter width calculation
+    this.state.updateCharMetricsWidth(charMetrics.width);
 
     const dims: ViewDimensions = { rowCount, colCount };
 

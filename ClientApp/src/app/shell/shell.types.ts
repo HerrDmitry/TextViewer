@@ -31,6 +31,12 @@ export interface TabViewState {
   startLine: number;
   /** Zero-based index of the first visible column (horizontal scroll position) */
   startCol: number;
+  /** Character offset within startLine for wrapped-mode scrolling (0 when wrap off) */
+  characterOffset: number;
+  /** Whether this tab needs a content refresh (set when wrap mode toggled while inactive) */
+  needsRefresh: boolean;
+  /** Backend-provided line numbers per visual row (parallel to viewRows); null until first response */
+  gutterNumbers: (number | null)[] | null;
 }
 
 /** Transient state during scrollbar thumb drag */

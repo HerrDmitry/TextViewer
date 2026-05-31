@@ -3,38 +3,49 @@
      (keydown)="onKeydown($event)">
   @if (!hasOpenTabs()) {
     <div class="empty-state">Ctrl-O to open a file</div>
-  } @else if (viewError()) {
-    <div class="view-error">{{ viewError() }}</div>
-  } @else if (viewRows()) {
-    <div class="view-content">
-      @for (row of viewRows(); track $index) {
-        <div class="view-row">{{ row }}</div>
-      }
-    </div>
-  }
+  } @else {
+    @if (viewRows()) {
+      <div class="line-number-gutter" #gutterEl
+           [style.width.px]="gutterWidth()">
+        @for (num of gutterNumbers(); track $index) {
+          <div class="gutter-cell">{{ num ?? '\u00A0' }}</div>
+        }
+      </div>
+      <div class="view-content" [style.margin-left.px]="gutterWidth()">
+        @for (row of viewRows(); track $index) {
+          <div class="view-row">{{ row }}</div>
+        }
+      </div>
+    }
+    @if (viewError()) {
+      <div class="view-error">{{ viewError() }}</div>
+    }
 
-  @if (scrollbarState(); as sb) {
-    @if (!sb.disabled) {
-      <div class="scrollbar-vertical" aria-label="Vertical scrollbar">
-        <div class="scrollbar-track" #verticalTrack>
-          <div class="scrollbar-thumb"
-               [style.height.px]="computeVerticalThumbPx()"
-               [style.top.px]="computeVerticalThumbTopPx()"
-               (mousedown)="onVerticalThumbMousedown($event)">
+    @if (scrollbarState(); as sb) {
+      @if (!sb.disabled) {
+        <div class="scrollbar-vertical" aria-label="Vertical scrollbar">
+          <div class="scrollbar-track" #verticalTrack>
+            <div class="scrollbar-thumb"
+                 [style.height.px]="computeVerticalThumbPx()"
+                 [style.top.px]="computeVerticalThumbTopPx()"
+                 (mousedown)="onVerticalThumbMousedown($event)">
+            </div>
           </div>
+          <span class="scrollbar-max">{{ sb.verticalMax }}</span>
         </div>
-        <span class="scrollbar-max">{{ sb.verticalMax }}</span>
-      </div>
-      <div class="scrollbar-horizontal" aria-label="Horizontal scrollbar">
-        <div class="scrollbar-track" #horizontalTrack>
-          <div class="scrollbar-thumb"
-               [style.width.px]="computeHorizontalThumbPx()"
-               [style.left.px]="computeHorizontalThumbLeftPx()"
-               (mousedown)="onHorizontalThumbMousedown($event)">
+        @if (!wrapMode()) {
+          <div class="scrollbar-horizontal" aria-label="Horizontal scrollbar">
+            <div class="scrollbar-track" #horizontalTrack>
+              <div class="scrollbar-thumb"
+                   [style.width.px]="computeHorizontalThumbPx()"
+                   [style.left.px]="computeHorizontalThumbLeftPx()"
+                   (mousedown)="onHorizontalThumbMousedown($event)">
+              </div>
+            </div>
+            <span class="scrollbar-max">{{ sb.horizontalMax }}</span>
           </div>
-        </div>
-        <span class="scrollbar-max">{{ sb.horizontalMax }}</span>
-      </div>
+        }
+      }
     }
   }
 </div>
