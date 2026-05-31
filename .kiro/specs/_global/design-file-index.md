@@ -74,11 +74,15 @@ classDiagram
     }
     class LineIndex {
         +int LineCount
+        +ulong MaxByteLength
+        +ulong? MaxCharLength
         +GetByteLength(int line) ulong
         +GetCharLength(int line) ulong?
         +GetByteOffset(int lineIndex) ulong
         -SegmentDirectory _segments
         -volatile int _charLengthsWrittenUpTo
+        -long _maxByteLength
+        -long _maxCharLength
     }
     class SegmentDirectory {
         +FindSegment(int line) Segment
@@ -144,8 +148,12 @@ public sealed class LineIndex
     private SegmentDirectory _segments = new();
     private volatile int _lineCount;
     private volatile int _charLengthsWrittenUpTo;
+    private long _maxByteLength;
+    private long _maxCharLength;
 
     public int LineCount => _lineCount;
+    public ulong MaxByteLength => (ulong)Interlocked.Read(ref _maxByteLength);
+    public ulong? MaxCharLength => _charLengthsWrittenUpTo == 0 ? null : (ulong)Interlocked.Read(ref _maxCharLength);
     public ulong GetByteLength(int lineIndex);
     public ulong? GetCharLength(int lineIndex);
     public ulong GetByteOffset(int lineIndex);
@@ -219,7 +227,7 @@ Responsibilities belong to the caller (AppComponent / handler layer), NOT to Fil
 
 ### Max Length Computation
 
-Caller computes max Byte_Length and max Char_Length from LineIndex for Status_Display. FileIndex/LineIndex does NOT expose `MaxByteLength` or `MaxCharLength` — caller iterates or tracks running max during polling.
+LineIndex exposes `MaxByteLength` (ulong) and `MaxCharLength` (ulong?) properties — O(1) cached reads. Values tracked incrementally: `AppendByteLengths` updates `_maxByteLength` inside `_writeLock`; `SetCharLength` updates `_maxCharLength` before publishing `_charLengthsWrittenUpTo`. `MaxCharLength` returns null when no char lengths written yet. `Clear()` resets both to 0. Thread-safe via `Interlocked.Read` on `long` backing fields.
 
 ## Data Models
 
@@ -322,6 +330,8 @@ Invariant: GetByteOffset(LineCount) == fileSize
 | LineCount read | `volatile int` | Atomic read |
 | GetByteLength | Segment data immutable after write; lock + volatile count publish | No torn read |
 | GetCharLength | `Interlocked` write; volatile `_charLengthsWrittenUpTo` | No torn read |
+| MaxByteLength | `Interlocked.Read` on `long` field; updated inside `_writeLock` | Atomic 64-bit read |
+| MaxCharLength | `Interlocked.Read` on `long` field; updated before `_charLengthsWrittenUpTo` publish | Atomic 64-bit read |
 | GetByteOffset | Reads only committed segments | Consistent sum |
 | AppendByteLengths | `_writeLock`; publishes segment then increments `_lineCount` | Complete pairs only |
 | SetCharLength | `Interlocked.Exchange` on char slot | Atomic write |

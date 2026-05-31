@@ -280,18 +280,9 @@ public class Program
         var lineIndex = service.LineIndex;
         var lineCount = lineIndex.LineCount;
 
-        // Compute max byte_length and max char_length by iterating
-        ulong maxByteLength = 0;
-        ulong maxCharLength = 0;
-        for (int i = 0; i < lineCount; i++)
-        {
-            var byteLen = lineIndex.GetByteLength(i);
-            if (byteLen > maxByteLength) maxByteLength = byteLen;
-
-            var charLen = lineIndex.GetCharLength(i);
-            if (charLen.HasValue && charLen.Value > maxCharLength)
-                maxCharLength = charLen.Value;
-        }
+        // O(1) cached max values from LineIndex
+        ulong maxByteLength = lineIndex.MaxByteLength;
+        ulong maxCharLength = lineIndex.MaxCharLength ?? 0;
 
         // Response: scanState\nlineCount\nmaxByteLength\nmaxCharLength
         return $"{scanState}\n{lineCount}\n{maxByteLength}\n{maxCharLength}";
