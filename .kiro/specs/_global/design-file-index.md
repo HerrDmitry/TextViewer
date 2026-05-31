@@ -312,13 +312,20 @@ No merge/split during Append. Full `Optimize()` exists for offline/test use only
 
 ```
 GetByteOffset(lineIndex):
-    offset = 0
-    for i in 0..lineIndex-1:
-        offset += GetByteLength(i)
-    return offset
+    if lineIndex == 0: return 0
+
+    segmentIndex = FindSegmentIndex(lineIndex - 1)
+    baseOffset = segmentPrefixBytes[segmentIndex]
+    localLineCount = (lineIndex - segmentStartLine(segmentIndex))
+    tailOffset = SumByteLengthsWithinSegment(segmentIndex, 0, localLineCount)
+
+    // optional locality fast-path for adjacent queries
+    // reuse last (lineIndex, offset, segmentIndex) cursor when possible
+    return baseOffset + tailOffset
 
 Invariant: GetByteOffset(0) == 0
 Invariant: GetByteOffset(LineCount) == fileSize
+Invariant: GetByteOffset(i) == Sum(GetByteLength(0..i-1)) for all valid i
 ```
 
 ### Thread-Safety Model
@@ -370,7 +377,7 @@ Invariant: GetByteOffset(LineCount) == fileSize
 
 Also validates byte-offset navigation: sum of Byte_Lengths[0..N-1] == file offset of line N.
 
-**Validates: Requirements 2.2, 2.3, 2.4**
+**Validates: Requirements 2.2, 2.3, 2.4, 10.1, 10.2**
 
 ### Property 2: Full_Scan char-length correctness
 
@@ -395,6 +402,12 @@ Also validates byte-offset navigation: sum of Byte_Lengths[0..N-1] == file offse
 *For any* valid line index, `FindSegment(lineIndex)` SHALL return correct segment and correct values.
 
 **Validates: Requirements 5.4**
+
+### Property 8: Byte-offset fast-path preservation
+
+*For any* valid line index, `GetByteOffset(lineIndex)` computed via segment-prefix metadata SHALL equal the baseline cumulative sum, while avoiding global per-line accumulation from line `0`.
+
+**Validates: Requirements 10.1, 10.2, 10.3, 10.4, 10.5**
 
 ### Property 6: State machine transition validity
 
@@ -470,7 +483,9 @@ public void Dispose()
 | UTF-8 multi-byte chars | Req 3.2 |
 | BOM excluded from Char_Length | Req 3.2 |
 | Invalid bytes → U+FFFD | Req 3.4 |
-| GetByteOffset correctness | Req 2.3 |
+| GetByteOffset correctness | Req 10.1, 10.2 |
+| GetByteOffset avoids global per-line accumulation | Req 10.3 |
+| Nearby offset queries reuse locality | Req 10.4 |
 | Interleaved pair storage | Req 4.4 |
 | Tier by max Byte_Length | Req 4.4, 5.1 |
 | SetCharLength doesn't affect byte slot | Req 4.3 |
@@ -486,7 +501,8 @@ public void Dispose()
 | Test | Validates |
 |------|-----------|
 | Scan real file end-to-end | Req 2, 3 |
-| GetByteOffset matches file positions | Req 2.3 |
+| GetByteOffset matches file positions | Req 10.1, 10.2 |
+| Large-file near-EOF offset query stays responsive | Req 10.3 |
 | Concurrent readers during scan | Req 4.1 |
 | Cancellation stops ≤500ms | Req 6.1 |
 | Large file (1M+ lines) no OOM | Req 5 |

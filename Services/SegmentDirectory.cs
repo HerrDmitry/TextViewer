@@ -17,6 +17,15 @@ internal sealed class SegmentDirectory
     /// <summary>Finds the segment containing the given line index via binary search.</summary>
     public Segment FindSegment(int lineIndex)
     {
+        return FindSegmentWithIndex(lineIndex).Segment;
+    }
+
+    /// <summary>
+    /// Finds the segment containing the given line index via binary search,
+    /// returning both segment and its index in the directory.
+    /// </summary>
+    public (Segment Segment, int SegmentIndex) FindSegmentWithIndex(int lineIndex)
+    {
         if (lineIndex < 0 || lineIndex >= TotalLines)
             throw new ArgumentOutOfRangeException(nameof(lineIndex));
 
@@ -38,7 +47,7 @@ internal sealed class SegmentDirectory
             }
             else
             {
-                return seg;
+                return (seg, mid);
             }
         }
 
