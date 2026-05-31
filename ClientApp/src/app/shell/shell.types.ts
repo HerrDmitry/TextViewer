@@ -19,8 +19,6 @@ export interface TabViewState {
   scanComplete: boolean;
   /** Cached rows from last successful get-view response */
   viewRows: string[] | null;
-  /** Raw response content string cached for gutter number computation in wrapped mode */
-  rawResponseContent: string | null;
   /** Error message from last get-view response */
   errorMessage: string | null;
   /** Non-null while awaiting a get-view response */
@@ -37,6 +35,8 @@ export interface TabViewState {
   characterOffset: number;
   /** Whether this tab needs a content refresh (set when wrap mode toggled while inactive) */
   needsRefresh: boolean;
+  /** Backend-provided line numbers per visual row (parallel to viewRows); null until first response */
+  gutterNumbers: (number | null)[] | null;
 }
 
 /** Transient state during scrollbar thumb drag */

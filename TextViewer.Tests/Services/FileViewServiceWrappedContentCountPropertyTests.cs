@@ -297,7 +297,7 @@ public class FileViewServiceWrappedContentCountPropertyTests : IDisposable
                 if (!result.IsSuccess)
                     return false.Label($"Expected success but got error: {result.Error.Message}");
 
-                var response = result.Value;
+                var response = result.Value.Content;
                 int contentChars = CountContentChars(response);
 
                 return (contentChars <= input.CharacterCount)
@@ -329,7 +329,7 @@ public class FileViewServiceWrappedContentCountPropertyTests : IDisposable
                 if (!result.IsSuccess)
                     return false.Label($"Expected success but got error: {result.Error.Message}");
 
-                var response = result.Value;
+                var response = result.Value.Content;
 
                 // Independently compute expected response
                 var lines = SplitIntoLinesWithDelimiters(input.FileContent);
@@ -405,9 +405,9 @@ public class FileViewServiceWrappedContentCountPropertyTests : IDisposable
                 if (!result.IsSuccess)
                     return false.Label($"Expected success but got error: {result.Error.Message}");
 
-                return (result.Value == "")
+                return (result.Value.Content == "")
                     .Label($"Expected empty string for startLine={input.StartLine} beyond file, " +
-                           $"got: [{Escape(result.Value)}]");
+                           $"got: [{Escape(result.Value.Content)}]");
             });
     }
 
@@ -434,7 +434,7 @@ public class FileViewServiceWrappedContentCountPropertyTests : IDisposable
                 if (!result.IsSuccess)
                     return false.Label($"Expected success but got error: {result.Error.Message}");
 
-                var response = result.Value;
+                var response = result.Value.Content;
 
                 // Extract only content chars from response (skip delimiters)
                 var responseContentChars = ExtractContentChars(response);

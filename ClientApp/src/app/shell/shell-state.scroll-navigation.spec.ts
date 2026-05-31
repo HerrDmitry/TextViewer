@@ -386,8 +386,8 @@ describe('ShellStateService scroll navigation', () => {
       const state = service.tabViewStates().get(vsId);
       const corrId = state!.pendingCorrelationId!;
 
-      // Simulate successful response
-      simulateViewResponse(corrId, 'new-line-1\nnew-line-2\nnew-line-3');
+      // Simulate successful response (non-wrapped format: lineNum\tcontent)
+      simulateViewResponse(corrId, '4\tnew-line-1\n5\tnew-line-2\n6\tnew-line-3');
 
       const updatedState = service.tabViewStates().get(vsId);
       expect(updatedState!.viewRows).toEqual(['new-line-1', 'new-line-2', 'new-line-3']);
@@ -400,7 +400,7 @@ describe('ShellStateService scroll navigation', () => {
       const state = service.tabViewStates().get(vsId);
       const corrId = state!.pendingCorrelationId!;
 
-      simulateViewResponse(corrId, 'row1\nrow2');
+      simulateViewResponse(corrId, '4\trow1\n5\trow2');
 
       const updatedState = service.tabViewStates().get(vsId);
       expect(updatedState!.pendingCorrelationId).toBeNull();
@@ -482,7 +482,7 @@ describe('ShellStateService scroll navigation', () => {
       service.handleWheel(1, 0);
       const state1 = service.tabViewStates().get(vsId1);
       const corrId1 = state1!.pendingCorrelationId!;
-      simulateViewResponse(corrId1, 'scrolled-row1\nscrolled-row2');
+      simulateViewResponse(corrId1, '4\tscrolled-row1\n5\tscrolled-row2');
 
       // Open second tab
       service.triggerOpenFile();
@@ -515,7 +515,7 @@ describe('ShellStateService scroll navigation', () => {
       const state1 = service.tabViewStates().get(vsId1);
       expect(state1!.startLine).toBe(3);
       const corrId1 = state1!.pendingCorrelationId!;
-      simulateViewResponse(corrId1, 'scrolled-row1\nscrolled-row2');
+      simulateViewResponse(corrId1, '4\tscrolled-row1\n5\tscrolled-row2');
 
       // Open second tab
       service.triggerOpenFile();
@@ -587,7 +587,7 @@ describe('ShellStateService scroll navigation', () => {
       expect(service.verticalThumbFraction()).toBeCloseTo(3 / 960);
 
       // After response, fraction remains the same (startLine unchanged by response)
-      simulateViewResponse(corrId, 'new-row1\nnew-row2');
+      simulateViewResponse(corrId, '4\tnew-row1\n5\tnew-row2');
       expect(service.verticalThumbFraction()).toBeCloseTo(3 / 960);
     });
   });

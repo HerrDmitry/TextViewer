@@ -8,7 +8,7 @@
       <div class="line-number-gutter" #gutterEl
            [style.width.px]="gutterWidth()">
         @for (num of gutterNumbers(); track $index) {
-          <div class="gutter-cell">{{ num ?? '' }}</div>
+          <div class="gutter-cell">{{ num ?? '\u00A0' }}</div>
         }
       </div>
       <div class="view-content" [style.margin-left.px]="gutterWidth()">

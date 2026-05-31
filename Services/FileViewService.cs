@@ -73,12 +73,12 @@ public sealed class FileViewService : IDisposable
         // Edge case: empty file after scan complete
         if (scanComplete && scannedLines == 0)
             return Task.FromResult(Result<ViewResult, ViewError>.Success(
-                new ViewResult(new[] { "" })));
+                new ViewResult(new[] { "" }, new[] { startLine + 1 })));
 
         // Edge case: startLine beyond file after scan complete
         if (scanComplete && startLine >= scannedLines)
             return Task.FromResult(Result<ViewResult, ViewError>.Success(
-                new ViewResult(new[] { "" })));
+                new ViewResult(new[] { "" }, new[] { startLine + 1 })));
 
         // Row extraction
         var rows = new List<string>();
@@ -159,7 +159,14 @@ public sealed class FileViewService : IDisposable
         if (rows.Count == 0)
             rows.Add("");
 
-        return Task.FromResult(Result<ViewResult, ViewError>.Success(new ViewResult(rows)));
+        // Build parallel line numbers: startLine + i + 1 for each row
+        var lineNumbers = new List<int>(rows.Count);
+        for (int i = 0; i < rows.Count; i++)
+        {
+            lineNumbers.Add(startLine + i + 1);
+        }
+
+        return Task.FromResult(Result<ViewResult, ViewError>.Success(new ViewResult(rows, lineNumbers)));
     }
 
     /// <summary>
@@ -167,24 +174,30 @@ public sealed class FileViewService : IDisposable
     /// Reads starting from the specified line at the specified character offset,
     /// collecting up to characterCount content characters. Newline delimiters
     /// are NOT counted toward characterCount but ARE included in the output.
+    /// Returns a WrappedViewResult with content and per-visual-row line numbers.
     /// </summary>
-    public Task<Result<string, ViewError>> GetWrappedViewAsync(
+    public Task<Result<WrappedViewResult, ViewError>> GetWrappedViewAsync(
         int startLine, int characterOffset, int characterCount,
+        int colCount = 1,
         CancellationToken cancellationToken = default)
     {
         // Validate parameters
         if (startLine < 0)
-            return Task.FromResult(Result<string, ViewError>.Failure(
+            return Task.FromResult(Result<WrappedViewResult, ViewError>.Failure(
                 new ViewError(ViewErrorCode.InvalidParameter,
                     "ERROR: startLine out of range")));
         if (characterOffset < 0)
-            return Task.FromResult(Result<string, ViewError>.Failure(
+            return Task.FromResult(Result<WrappedViewResult, ViewError>.Failure(
                 new ViewError(ViewErrorCode.InvalidParameter,
                     "ERROR: characterOffset out of range")));
         if (characterCount < 1)
-            return Task.FromResult(Result<string, ViewError>.Failure(
+            return Task.FromResult(Result<WrappedViewResult, ViewError>.Failure(
                 new ViewError(ViewErrorCode.InvalidParameter,
                     "ERROR: characterCount out of range")));
+        if (colCount < 1)
+            return Task.FromResult(Result<WrappedViewResult, ViewError>.Failure(
+                new ViewError(ViewErrorCode.InvalidParameter,
+                    "ERROR: colCount out of range")));
 
         // Check cancellation (linked: service-level + per-request)
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
@@ -194,7 +207,7 @@ public sealed class FileViewService : IDisposable
 
         // Check if FileIndex is in Failed state before opening handle
         if (_fileIndex.State == ScanState.Failed)
-            return Task.FromResult(Result<string, ViewError>.Failure(
+            return Task.FromResult(Result<WrappedViewResult, ViewError>.Failure(
                 new ViewError(ViewErrorCode.FileNotAccessible,
                     $"File index failed: {_filePath}")));
 
@@ -205,16 +218,22 @@ public sealed class FileViewService : IDisposable
 
         // Start line beyond file
         if (startLine >= scannedLines)
-            return Task.FromResult(Result<string, ViewError>.Success(""));
+            return Task.FromResult(Result<WrappedViewResult, ViewError>.Success(
+                new WrappedViewResult("", new List<int?>())));
 
         // Scan in progress and line beyond scanned range
         if (!scanComplete && startLine >= scannedLines)
-            return Task.FromResult(Result<string, ViewError>.Success(""));
+            return Task.FromResult(Result<WrappedViewResult, ViewError>.Success(
+                new WrappedViewResult("", new List<int?>())));
 
         var result = new StringBuilder();
         int contentCharsCollected = 0;
         int currentLine = startLine;
         int currentOffset = characterOffset;
+
+        // Track per-character logical line ownership for line number computation
+        // Each entry = 1-based logical line number for that content character
+        var charLineMap = new List<int>();
 
         FileStream? stream = null;
         try
@@ -260,6 +279,13 @@ public sealed class FileViewService : IDisposable
                 int toTake = Math.Min(available,
                     characterCount - contentCharsCollected);
                 result.Append(content, currentOffset, toTake);
+
+                // Record logical line for each content char taken
+                int logicalLineNumber = currentLine + 1; // 1-based
+                for (int c = 0; c < toTake; c++)
+                {
+                    charLineMap.Add(logicalLineNumber);
+                }
                 contentCharsCollected += toTake;
 
                 // If we consumed the entire remaining line content, append delimiter
@@ -275,13 +301,13 @@ public sealed class FileViewService : IDisposable
         }
         catch (FileNotFoundException)
         {
-            return Task.FromResult(Result<string, ViewError>.Failure(
+            return Task.FromResult(Result<WrappedViewResult, ViewError>.Failure(
                 new ViewError(ViewErrorCode.FileNotAccessible,
                     $"File not accessible: {_filePath}")));
         }
         catch (IOException)
         {
-            return Task.FromResult(Result<string, ViewError>.Failure(
+            return Task.FromResult(Result<WrappedViewResult, ViewError>.Failure(
                 new ViewError(ViewErrorCode.IoError,
                     $"Read error: {_filePath}")));
         }
@@ -290,8 +316,123 @@ public sealed class FileViewService : IDisposable
             stream?.Dispose();
         }
 
-        return Task.FromResult(Result<string, ViewError>.Success(
-            result.ToString()));
+        // Compute per-visual-row line numbers using col-count splitting
+        var contentStr = result.ToString();
+        var lineNumbers = ComputeWrappedLineNumbers(contentStr, colCount, charLineMap);
+
+        return Task.FromResult(Result<WrappedViewResult, ViewError>.Success(
+            new WrappedViewResult(contentStr, lineNumbers)));
+    }
+
+    /// <summary>
+    /// Splits content into visual rows (same logic as frontend splitIntoVisualRows)
+    /// and assigns line numbers: first visual row of each logical line gets the
+    /// 1-based line number, continuation rows get null.
+    /// </summary>
+    internal static IReadOnlyList<int?> ComputeWrappedLineNumbers(
+        string content, int colCount, List<int> charLineMap)
+    {
+        if (string.IsNullOrEmpty(content))
+            return new List<int?>();
+
+        var lineNumbers = new List<int?>();
+        int contentCharIdx = 0; // index into charLineMap (content chars only, excludes delimiters)
+        int colPos = 0;
+        int? currentRowLineNumber = null;
+        bool rowStarted = false;
+
+        for (int i = 0; i < content.Length; i++)
+        {
+            char ch = content[i];
+
+            // Detect newline delimiters (not counted as content chars)
+            if (ch == '\n' || ch == '\r')
+            {
+                // End current row
+                if (rowStarted || lineNumbers.Count == 0)
+                {
+                    lineNumbers.Add(currentRowLineNumber);
+                }
+
+                // Handle \r\n as single delimiter
+                if (ch == '\r' && i + 1 < content.Length && content[i + 1] == '\n')
+                {
+                    i++; // skip \n
+                }
+
+                // Start fresh row after newline
+                colPos = 0;
+                currentRowLineNumber = null;
+                rowStarted = false;
+                continue;
+            }
+
+            // Content character
+            if (!rowStarted)
+            {
+                rowStarted = true;
+                // Determine line number for this row from first content char
+                if (contentCharIdx < charLineMap.Count)
+                {
+                    int lineNum = charLineMap[contentCharIdx];
+                    // First visual row of this logical line gets the number
+                    // Check if previous row was same logical line (continuation)
+                    if (lineNumbers.Count == 0)
+                    {
+                        currentRowLineNumber = lineNum;
+                    }
+                    else
+                    {
+                        // If this is a continuation of same logical line, null
+                        // Otherwise, new logical line gets number
+                        currentRowLineNumber = IsFirstRowOfLine(lineNumbers, lineNum)
+                            ? null : lineNum;
+                    }
+                }
+            }
+
+            contentCharIdx++;
+            colPos++;
+
+            // Col-count wrap: row is full
+            if (colPos >= colCount && i + 1 < content.Length)
+            {
+                // Check if next char is a newline — if so, let newline handling close the row
+                char nextCh = content[i + 1];
+                if (nextCh != '\n' && nextCh != '\r')
+                {
+                    lineNumbers.Add(currentRowLineNumber);
+                    colPos = 0;
+                    currentRowLineNumber = null;
+                    rowStarted = false;
+                }
+            }
+        }
+
+        // Final row (if content doesn't end with newline)
+        if (rowStarted)
+        {
+            lineNumbers.Add(currentRowLineNumber);
+        }
+
+        return lineNumbers;
+    }
+
+    /// <summary>
+    /// Checks if lineNum already appeared as a non-null entry in lineNumbers.
+    /// If it did, this row is a continuation (should be null).
+    /// </summary>
+    private static bool IsFirstRowOfLine(List<int?> lineNumbers, int lineNum)
+    {
+        for (int i = lineNumbers.Count - 1; i >= 0; i--)
+        {
+            var entry = lineNumbers[i];
+            if (entry == lineNum)
+                return true; // already assigned → this is continuation
+            if (entry.HasValue && entry.Value != lineNum)
+                break; // hit a different line number, stop looking
+        }
+        return false;
     }
 
     public void Dispose()

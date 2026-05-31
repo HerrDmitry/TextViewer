@@ -159,9 +159,10 @@ public class Program
         var fields = payload.Split('\n');
 
         // Detect wrapped mode: second field is "W"
-        if (fields.Length == 5 && fields[1] == "W")
+        // Accepts 5 fields (legacy) or 6 fields (with colCount)
+        if ((fields.Length == 5 || fields.Length == 6) && fields[1] == "W")
         {
-            // Wrapped-mode request: viewSessionId\nW\nstartLine\ncharOffset\ncharCount
+            // Wrapped-mode request: viewSessionId\nW\nstartLine\ncharOffset\ncharCount[\ncolCount]
             var viewSessionId = fields[0];
 
             if (!int.TryParse(fields[2], out var startLine) || startLine < 0)
@@ -171,17 +172,28 @@ public class Program
             if (!int.TryParse(fields[4], out var charCount) || charCount < 1)
                 return "ERROR: characterCount out of range";
 
+            int wrappedColCount = 1;
+            if (fields.Length == 6)
+            {
+                if (!int.TryParse(fields[5], out wrappedColCount) || wrappedColCount < 1)
+                    return "ERROR: colCount out of range";
+            }
+
             FileViewService? service;
             lock (sessionLock) { sessions.TryGetValue(viewSessionId, out service); }
             if (service is null)
                 return "ERROR: Session not found";
 
             var result = await service.GetWrappedViewAsync(
-                startLine, charOffset, charCount);
+                startLine, charOffset, charCount, wrappedColCount);
             if (!result.IsSuccess)
                 return result.Error.Message;
 
-            return result.Value;
+            // Format response: L:{n1},{n2},{n3},...\n{content}
+            var wrappedLineNumbers = result.Value.LineNumbers;
+            var header = "L:" + string.Join(",",
+                wrappedLineNumbers.Select(n => n.HasValue ? n.Value.ToString() : ""));
+            return header + "\n" + result.Value.Content;
         }
 
         // Standard rectangular mode (existing logic)
@@ -213,12 +225,13 @@ public class Program
         if (!rectResult.IsSuccess)
             return $"ERROR:{rectResult.Error.Message}";
 
-        // Strip line-ending delimiters from each row, join with \n
+        // Strip line-ending delimiters from each row, prefix with line number + tab, join with \n
         var rows = rectResult.Value.Rows;
+        var lineNumbers = rectResult.Value.LineNumbers;
         var stripped = new string[rows.Count];
         for (int i = 0; i < rows.Count; i++)
         {
-            stripped[i] = StripDelimiter(rows[i]);
+            stripped[i] = $"{lineNumbers[i]}\t{StripDelimiter(rows[i])}";
         }
         return string.Join('\n', stripped);
     }

@@ -70,12 +70,14 @@ public class BackendHandlerTests : IDisposable
         // Act
         var result = await Program.HandleGetView(payload, sessions, _sessionLock);
 
-        // Assert
+        // Assert — new format: {lineNum}\t{content}
         Assert.NotNull(result);
         Assert.DoesNotContain("ERROR:", result);
         var rows = result!.Split('\n');
         Assert.True(rows.Length >= 1);
-        Assert.Equal("Line1", rows[0]);
+        Assert.Equal("1\tLine1", rows[0]);
+        Assert.Equal("2\tLine2", rows[1]);
+        Assert.Equal("3\tLine3", rows[2]);
 
         service.Dispose();
     }
@@ -218,6 +220,137 @@ public class BackendHandlerTests : IDisposable
         Assert.NotNull(result);
         Assert.StartsWith("ERROR:", result);
         Assert.Contains("startLine", result);
+    }
+
+    #endregion
+
+    #region get-view wrapped mode tests
+
+    /// <summary>
+    /// Test get-view wrapped mode with valid payload → L: header + content.
+    /// Validates: Requirements 2.2, 3.3
+    /// </summary>
+    [Fact]
+    public async Task GetView_WrappedMode_ReturnsLHeaderAndContent()
+    {
+        // Arrange — file with short lines, colCount=10 means no wrapping within lines
+        var filePath = CreateTempFile("AAAA\nBBBB\nCCCC\n");
+        var sessions = new Dictionary<string, FileViewService>();
+        var sessionId = Guid.NewGuid().ToString();
+        var service = CreateService(filePath);
+        sessions[sessionId] = service;
+
+        await WaitForScan(service);
+
+        // Wrapped request: viewSessionId\nW\nstartLine\ncharOffset\ncharCount\ncolCount
+        var payload = $"{sessionId}\nW\n0\n0\n20\n10";
+
+        // Act
+        var result = await Program.HandleGetView(payload, sessions, _sessionLock);
+
+        // Assert — response starts with L: header
+        Assert.NotNull(result);
+        Assert.DoesNotContain("ERROR", result);
+        Assert.StartsWith("L:", result);
+
+        // Parse header
+        var newlineIdx = result!.IndexOf('\n');
+        Assert.True(newlineIdx > 0);
+        var header = result.Substring(2, newlineIdx - 2); // strip "L:" prefix
+        var lineNums = header.Split(',');
+        // Each entry is either a number or empty (continuation)
+        foreach (var entry in lineNums)
+        {
+            if (!string.IsNullOrEmpty(entry))
+                Assert.True(int.TryParse(entry, out _));
+        }
+
+        // Content after header should not be empty
+        var content = result.Substring(newlineIdx + 1);
+        Assert.NotEmpty(content);
+
+        service.Dispose();
+    }
+
+    /// <summary>
+    /// Test get-view wrapped mode with 5 fields (legacy, no colCount) → defaults colCount=1.
+    /// Validates: Requirements 3.2, 3.3
+    /// </summary>
+    [Fact]
+    public async Task GetView_WrappedMode_5Fields_DefaultsColCount1()
+    {
+        // Arrange
+        var filePath = CreateTempFile("Hello\nWorld\n");
+        var sessions = new Dictionary<string, FileViewService>();
+        var sessionId = Guid.NewGuid().ToString();
+        var service = CreateService(filePath);
+        sessions[sessionId] = service;
+
+        await WaitForScan(service);
+
+        // 5-field wrapped request (legacy): viewSessionId\nW\nstartLine\ncharOffset\ncharCount
+        var payload = $"{sessionId}\nW\n0\n0\n15";
+
+        // Act
+        var result = await Program.HandleGetView(payload, sessions, _sessionLock);
+
+        // Assert — still returns L: header format
+        Assert.NotNull(result);
+        Assert.DoesNotContain("ERROR", result);
+        Assert.StartsWith("L:", result);
+
+        service.Dispose();
+    }
+
+    /// <summary>
+    /// Test get-view wrapped mode with invalid startLine → ERROR.
+    /// Validates: Requirements 3.3
+    /// </summary>
+    [Fact]
+    public async Task GetView_WrappedMode_InvalidStartLine_ReturnsError()
+    {
+        var sessions = new Dictionary<string, FileViewService>();
+
+        var payload = "session-id\nW\n-1\n0\n20\n10";
+        var result = await Program.HandleGetView(payload, sessions, _sessionLock);
+
+        Assert.NotNull(result);
+        Assert.StartsWith("ERROR:", result);
+        Assert.Contains("startLine", result);
+    }
+
+    /// <summary>
+    /// Test get-view wrapped mode with invalid charCount → ERROR.
+    /// Validates: Requirements 3.3
+    /// </summary>
+    [Fact]
+    public async Task GetView_WrappedMode_InvalidCharCount_ReturnsError()
+    {
+        var sessions = new Dictionary<string, FileViewService>();
+
+        var payload = "session-id\nW\n0\n0\n0\n10";
+        var result = await Program.HandleGetView(payload, sessions, _sessionLock);
+
+        Assert.NotNull(result);
+        Assert.StartsWith("ERROR:", result);
+        Assert.Contains("characterCount", result);
+    }
+
+    /// <summary>
+    /// Test get-view wrapped mode with unknown session → ERROR.
+    /// Validates: Requirements 3.3
+    /// </summary>
+    [Fact]
+    public async Task GetView_WrappedMode_UnknownSession_ReturnsError()
+    {
+        var sessions = new Dictionary<string, FileViewService>();
+
+        var payload = "non-existent\nW\n0\n0\n20\n10";
+        var result = await Program.HandleGetView(payload, sessions, _sessionLock);
+
+        Assert.NotNull(result);
+        Assert.StartsWith("ERROR:", result);
+        Assert.Contains("Session not found", result);
     }
 
     #endregion
@@ -565,11 +698,14 @@ public class BackendHandlerTests : IDisposable
         var result1 = await Program.HandleGetView(payload1, sessions, _sessionLock);
         var result2 = await Program.HandleGetView(payload2, sessions, _sessionLock);
 
-        // Assert - both return valid results independently
+        // Assert - both return valid results independently with {lineNum}\t{content} format
         Assert.NotNull(result1);
         Assert.NotNull(result2);
         Assert.DoesNotContain("ERROR:", result1);
         Assert.DoesNotContain("ERROR:", result2);
+        // Verify new format: first row should be "1\tShared content"
+        Assert.StartsWith("1\t", result1!.Split('\n')[0]);
+        Assert.StartsWith("1\t", result2!.Split('\n')[0]);
 
         // Close one session, other still works
         Program.HandleCloseFile(sessionId1, sessions, _sessionLock);

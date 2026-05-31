@@ -336,8 +336,8 @@ describe('ShellStateService text-handling extensions', () => {
       const state = service.tabViewStates().get(vsId);
       const pendingCorrId = state!.pendingCorrelationId!;
 
-      // Simulate response
-      simulateGetViewResponse(pendingCorrId, 'row1\nrow2');
+      // Simulate response (non-wrapped format: lineNum\tcontent)
+      simulateGetViewResponse(pendingCorrId, '1\trow1\n2\trow2');
 
       // Now resize — should send a new get-view
       mockSend.mockClear();
@@ -395,7 +395,7 @@ describe('ShellStateService text-handling extensions', () => {
       service.closeTab(tabs[0].id);
 
       // Simulate late response — should be discarded
-      simulateGetViewResponse(pendingCorrId, 'late-row1\nlate-row2');
+      simulateGetViewResponse(pendingCorrId, '1\tlate-row1\n2\tlate-row2');
 
       // No TabViewState exists for this session anymore
       expect(service.tabViewStates().has(vsId)).toBe(false);

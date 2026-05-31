@@ -2,7 +2,7 @@ import { computed, Injectable, inject, OnDestroy, signal } from '@angular/core';
 import { MessageBusClient } from '../services/message-bus-client.service';
 import { InboundMessage, SubscriptionHandle } from '../services/message-bus.types';
 import { extractFileName } from './extract-file-name';
-import { splitIntoVisualRows, scrollByVisualRows, computeGutterWidth, computeNonWrappedLineNumbers, computeWrappedGutterNumbers, computeWrappedScrollbarMax } from './line-wrap-utils';
+import { splitIntoVisualRows, scrollByVisualRows, computeGutterWidth, computeWrappedScrollbarMax } from './line-wrap-utils';
 import { Tab, TabPosition, TabViewState, ScrollbarState, ScanStateValue, ViewDimensions, DragState } from './shell.types';
 
 /** Number of lines/columns to scroll per mouse wheel tick */
@@ -102,13 +102,6 @@ export class ShellStateService implements OnDestroy {
     return this.tabViewStates().get(tab.viewSessionId) ?? null;
   });
 
-  readonly activeResponseContent = computed(() => {
-    const tab = this.activeTab();
-    if (!tab) return '';
-    const state = this.tabViewStates().get(tab.viewSessionId);
-    return state?.rawResponseContent ?? '';
-  });
-
   readonly activeTotalLogicalLines = computed<number>(() => {
     // In wrapped mode, verticalMax represents visual rows, not logical lines.
     // Use totalLogicalLines signal (from get-line-lengths response) when available.
@@ -127,17 +120,9 @@ export class ShellStateService implements OnDestroy {
   });
 
   readonly activeGutterNumbers = computed<(number | null)[]>(() => {
-    const rows = this.activeViewRows();
-    if (!rows || rows.length === 0) return [];
     const state = this.activeTabViewState();
     if (!state) return [];
-    if (!this.wrapMode()) {
-      return computeNonWrappedLineNumbers(state.startLine, rows.length);
-    }
-    const content = this.activeResponseContent();
-    const dims = this.viewDimensions();
-    if (!dims) return [];
-    return computeWrappedGutterNumbers(content, dims.colCount, state.startLine, state.characterOffset);
+    return state.gutterNumbers ?? [];
   });
 
   readonly verticalThumbRatio = computed(() => {
@@ -267,7 +252,6 @@ export class ShellStateService implements OnDestroy {
       updatedStates.set(viewSessionId, {
         scanComplete: false,
         viewRows: initialRows,
-        rawResponseContent: null,
         errorMessage: null,
         pendingCorrelationId: null,
         deferred: false,
@@ -276,6 +260,7 @@ export class ShellStateService implements OnDestroy {
         startCol: 0,
         characterOffset: 0,
         needsRefresh: false,
+        gutterNumbers: null,
       });
       this.tabViewStates.set(updatedStates);
 
@@ -521,7 +506,6 @@ export class ShellStateService implements OnDestroy {
       updated.set(viewSessionId, {
         scanComplete: true,
         viewRows: null,
-        rawResponseContent: null,
         errorMessage: null,
         pendingCorrelationId: null,
         deferred: false,
@@ -530,6 +514,7 @@ export class ShellStateService implements OnDestroy {
         startCol: 0,
         characterOffset: 0,
         needsRefresh: false,
+        gutterNumbers: null,
       });
       this.tabViewStates.set(updated);
     }
@@ -574,28 +559,62 @@ export class ShellStateService implements OnDestroy {
         pendingCorrelationId: null,
       });
     } else {
-      // Success response: split payload and store in viewRows, clear errorMessage
+      // Success response: parse line numbers from backend response format
       const dims = this.viewDimensions();
       if (this.wrapMode() && dims) {
-        // Wrapped mode: split response content into visual rows at Col_Count boundaries
-        const rows = splitIntoVisualRows(msg.payload, dims.colCount);
-        updated.set(matchedSessionId, {
-          ...currentState,
-          viewRows: rows,
-          rawResponseContent: msg.payload,
-          errorMessage: null,
-          pendingCorrelationId: null,
-        });
+        // Wrapped mode: response format is "L:{n1},{n2},...\n{content}"
+        const headerEnd = msg.payload.indexOf('\n');
+        if (headerEnd === -1 || !msg.payload.startsWith('L:')) {
+          // Malformed wrapped response — log error, keep previous state
+          console.error('Malformed wrapped view response: missing L: header');
+          updated.set(matchedSessionId, {
+            ...currentState,
+            pendingCorrelationId: null,
+          });
+        } else {
+          const header = msg.payload.substring(2, headerEnd);
+          const content = msg.payload.substring(headerEnd + 1);
+          const gutterNumbers = header.split(',').map(v => v === '' ? null : parseInt(v, 10));
+          const rows = splitIntoVisualRows(content, dims.colCount);
+          updated.set(matchedSessionId, {
+            ...currentState,
+            viewRows: rows,
+            gutterNumbers,
+            errorMessage: null,
+            pendingCorrelationId: null,
+          });
+        }
       } else {
-        // Non-wrapped mode: split payload by \n
-        const rows = msg.payload.split('\n');
-        updated.set(matchedSessionId, {
-          ...currentState,
-          viewRows: rows,
-          rawResponseContent: null,
-          errorMessage: null,
-          pendingCorrelationId: null,
-        });
+        // Non-wrapped mode: each row is "{lineNum}\t{content}"
+        const rawRows = msg.payload.split('\n');
+        const parsedRows: string[] = [];
+        const gutterNumbers: (number | null)[] = [];
+        let malformed = false;
+        for (const row of rawRows) {
+          const tabIdx = row.indexOf('\t');
+          if (tabIdx === -1) {
+            // Malformed non-wrapped response — log error, keep previous state
+            console.error('Malformed non-wrapped view response: missing tab separator');
+            malformed = true;
+            break;
+          }
+          gutterNumbers.push(parseInt(row.substring(0, tabIdx), 10));
+          parsedRows.push(row.substring(tabIdx + 1));
+        }
+        if (malformed) {
+          updated.set(matchedSessionId, {
+            ...currentState,
+            pendingCorrelationId: null,
+          });
+        } else {
+          updated.set(matchedSessionId, {
+            ...currentState,
+            viewRows: parsedRows,
+            gutterNumbers,
+            errorMessage: null,
+            pendingCorrelationId: null,
+          });
+        }
       }
     }
 
@@ -1062,8 +1081,8 @@ export class ShellStateService implements OnDestroy {
     // Cap at INT32_MAX
     const cappedCount = Math.min(characterCount, 2_147_483_647);
 
-    // Payload: viewSessionId\nW\nstartLine\ncharacterOffset\ncharacterCount
-    const payload = `${sessionId}\nW\n${state.startLine}\n${state.characterOffset}\n${cappedCount}`;
+    // Payload: viewSessionId\nW\nstartLine\ncharacterOffset\ncharacterCount\ncolCount
+    const payload = `${sessionId}\nW\n${state.startLine}\n${state.characterOffset}\n${cappedCount}\n${dims.colCount}`;
     const correlationId = this.messageBus.send('get-view', payload);
 
     const updated = new Map(this.tabViewStates());
