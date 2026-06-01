@@ -106,7 +106,7 @@ Depends on: text-handling (view request/response, measurement), scroll-navigatio
 1. WHILE Wrap_Mode on, THE frontend SHALL split response content into Visual_Rows of at most Col_Count chars (hard wrap); newlines consumed as line-boundary markers
 2. Each Visual_Row rendered as block-level element, same monospace font
 3. Horizontal scrollbar hidden in wrapped mode
-4. Vertical scrollbar Scrollbar_Max = sum of ceil(charLength / colCount) per Logical_Line (empty lines = 1)
+4. Vertical scrollbar Scrollbar_Max = total visual rows from backend `get-wrapped-line-count` response (see `requirements-wrapped-line-count.md`)
 5. Newline ends current Visual_Row (even if < Col_Count chars placed)
 6. Empty response content → zero Visual_Rows
 
@@ -116,12 +116,12 @@ Depends on: text-handling (view request/response, measurement), scroll-navigatio
 
 #### Acceptance Criteria
 
-1. Vertical scroll actions advance by Visual_Rows using Character_Offset and startLine
-2. Scroll down: offset += Col_Count; if offset ≥ line content length → next line, offset=0
-3. Scroll up: offset -= Col_Count; if negative → previous line's last wrapped row offset
-4. At top (line=0, offset=0) + scroll up → no change, no request
-5. At last Visual_Row + scroll down → no change, no request
-6. Wheel step = 3 Visual_Rows per tick (iterative application of single-row logic)
+1. Vertical scroll actions advance by Visual_Row using visual row index (startLine in wrapped mode = visual row index; backend resolves to logical position)
+2. Scroll down: startLine += step; clamped to verticalMax - rowCount
+3. Scroll up: startLine -= step; clamped to 0
+4. At top (startLine=0) + scroll up → no change, no request
+5. At max scroll position + scroll down → no change, no request
+6. Wheel step = 3 Visual_Rows per tick
 7. Arrow key step = 1 Visual_Row per press
 
 ### Requirement 9: Gutter Interaction with Viewport Measurement

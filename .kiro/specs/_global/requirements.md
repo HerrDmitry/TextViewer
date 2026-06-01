@@ -7,6 +7,7 @@
 #[[file:.kiro/specs/_global/requirements-text-handling.md]]
 #[[file:.kiro/specs/_global/requirements-scroll-navigation.md]]
 #[[file:.kiro/specs/_global/requirements-line-wrap-numbers.md]]
+#[[file:.kiro/specs/_global/requirements-wrapped-line-count.md]]
 
 ## Introduction
 
@@ -30,6 +31,7 @@ TextViewer is a cross-platform desktop application for viewing text content. Thi
 - **Line_Number_Gutter**: Fixed-width column left of text content displaying 1-based line numbers (see `requirements-line-wrap-numbers.md`)
 - **Wrap_Mode**: Display mode where long lines hard-wrap at Col_Count boundary (see `requirements-line-wrap-numbers.md`)
 - **Visual_Row**: Single rendered row; in wrapped mode a Logical_Line may produce multiple (see `requirements-line-wrap-numbers.md`)
+- **Visual_Row_Index**: Zero-based index into flattened sequence of all visual rows; used for scroll position and backend resolution (see `requirements-wrapped-line-count.md`)
 
 ## Requirements
 
@@ -155,3 +157,18 @@ Full spec in `requirements-line-wrap-numbers.md`. Summary:
 5. THE frontend SHALL split wrapped response content into Visual_Rows at Col_Count boundaries
 6. THE frontend SHALL scroll wrapped mode by Visual_Row (Character_Offset increments of Col_Count)
 7. THE Col_Count computation SHALL subtract Gutter_Width from available pixel width
+
+### Requirement 10: Wrapped Line Count & Visual Row Resolution
+
+**User Story:** As a user, I want the wrapped-mode scrollbar sized correctly without per-line data transfer, and scroll navigation resolved server-side.
+
+#### Acceptance Criteria
+
+Full spec in `requirements-wrapped-line-count.md`. Summary:
+
+1. THE backend SHALL provide a `get-wrapped-line-count` handler returning total visual rows as single integer
+2. THE backend SHALL compute visual rows using Parallel.For with char-length fallback to byte-length
+3. THE backend SHALL cache results per session keyed by (sessionId, colCount, lineCount)
+4. THE backend SHALL resolve visual row indices to (startLine, characterOffset) for scroll navigation
+5. THE frontend SHALL request `get-wrapped-line-count` on wrap toggle, scan complete, resize, and tab activation
+6. THE `get-line-lengths` handler and frontend `lineLengths` infrastructure SHALL be removed entirely

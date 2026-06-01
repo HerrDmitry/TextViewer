@@ -7,6 +7,7 @@
 #[[file:.kiro/specs/_global/design-text-handling.md]]
 #[[file:.kiro/specs/_global/design-scroll-navigation.md]]
 #[[file:.kiro/specs/_global/design-line-wrap-numbers.md]]
+#[[file:.kiro/specs/_global/design-wrapped-line-count.md]]
 
 ## Overview
 
@@ -18,6 +19,7 @@ This document captures the full product design for all shipped features. Archite
 - Text Handling → `design-text-handling.md`
 - Scroll Navigation → `design-scroll-navigation.md`
 - Line Wrap & Line Numbers → `design-line-wrap-numbers.md`
+- Wrapped Line Count & Visual Row Resolution → `design-wrapped-line-count.md`
 
 ## Architecture
 
@@ -33,6 +35,7 @@ graph TD
     G --> H2[get-view handler]
     G --> H3[close-file handler]
     G --> H4[get-scroll-info handler]
+    G --> H5[get-wrapped-line-count handler]
     H --> I[FileViewService]
     H2 --> I
     H3 --> I
@@ -64,8 +67,9 @@ Entry point — configures and launches Photino.Blazor app, sets up Message Bus.
 - Register Blazor root component
 - Configure Photino window properties (title, size, resizability)
 - Instantiate `PhotinoMessageBridge` + `MessageBusHost`
-- Register message handlers (open-file, get-view, close-file, get-scroll-info, exit) on the bus
+- Register message handlers (open-file, get-view, close-file, get-scroll-info, get-wrapped-line-count, exit) on the bus
 - Manage FileViewService session map (Dictionary<string, FileViewService>)
+- Manage wrapped line count cache (Dictionary<string, (int, int, long)>)
 - Monitor scan state and push "scan-complete" notifications
 - Start application event loop
 
@@ -217,6 +221,7 @@ Properties defined per feature in their respective design docs:
 - **Text Handling**: 12 properties (dimension computation, view request orchestration, payload round-trips, response encoding, session lifecycle, scrollbar invariants, polling lifecycle) — see `design-text-handling.md`
 - **Scroll Navigation**: 5 properties (scroll step clamping, drag position clamping, non-interactive guard, thumb position fraction, thumb size ratio) — see `design-scroll-navigation.md`
 - **Line Wrap & Line Numbers**: 10 properties (backend-provided line numbers, preservation, gutter width, splitIntoVisualRows, scroll position, content-count invariant, param validation, payload round-trip, scrollbar max, col-count with gutter) — see `design-line-wrap-numbers.md`
+- **Wrapped Line Count**: 5 properties (computation correctness, visual row index round-trip, cache key correctness, char-length fallback, response parsing) — see `design-wrapped-line-count.md`
 
 ## Testing Strategy
 
