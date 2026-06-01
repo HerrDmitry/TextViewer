@@ -66,7 +66,7 @@ sequenceDiagram
 5. **Backend computes line numbers** — eliminates race conditions between scroll state and response content; frontend reads gutterNumbers directly from response
 6. **6-field wrapped request** — includes colCount so backend can compute per-visual-row line numbers matching frontend's splitIntoVisualRows logic
 7. **Frontend splits response into Visual_Rows** — backend returns flat content; frontend splits at Col_Count boundaries and newlines
-8. **Scrollbar_Max in wrapped mode from line metadata** — `get-line-lengths` message provides per-line char lengths; frontend computes sum(ceil(len/colCount))
+8. **Scrollbar_Max in wrapped mode from line metadata** — `get-line-lengths` message provides per-line char lengths; frontend computes sum(ceil(len/colCount)). Request only fires when `wrapMode()` is active — guarded in `handleScrollInfoResponse` to prevent flooding the bridge with per-line data in non-wrapped mode.
 9. **No word wrap** — hard wrap at exact Col_Count boundary
 10. **Empty gutter cells use non-breaking space** — prevents height collapse in wrapped mode continuation rows
 

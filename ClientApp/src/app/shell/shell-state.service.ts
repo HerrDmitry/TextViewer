@@ -2,7 +2,7 @@ import { computed, Injectable, inject, OnDestroy, signal } from '@angular/core';
 import { MessageBusClient } from '../services/message-bus-client.service';
 import { InboundMessage, SubscriptionHandle } from '../services/message-bus.types';
 import { extractFileName } from './extract-file-name';
-import { splitIntoVisualRows, scrollByVisualRows, computeGutterWidth, computeWrappedScrollbarMax } from './line-wrap-utils';
+import { splitIntoVisualRows, computeGutterWidth } from './line-wrap-utils';
 import { Tab, TabPosition, TabViewState, ScrollbarState, ScanStateValue, ViewDimensions, DragState } from './shell.types';
 
 /** Number of lines/columns to scroll per mouse wheel tick */
@@ -59,8 +59,7 @@ export class ShellStateService implements OnDestroy {
   readonly viewDimensions = signal<ViewDimensions | null>(null);
   readonly dragState = signal<DragState | null>(null);
   readonly wrapMode = signal<boolean>(false);
-  readonly lineLengths = signal<Map<number, number>>(new Map());
-  readonly totalLogicalLines = signal<number>(0);
+
   readonly charMetricsWidth = signal<number>(0);
 
   // --- Computed signals ---
@@ -103,11 +102,8 @@ export class ShellStateService implements OnDestroy {
   });
 
   readonly activeTotalLogicalLines = computed<number>(() => {
-    // In wrapped mode, verticalMax represents visual rows, not logical lines.
-    // Use totalLogicalLines signal (from get-line-lengths response) when available.
-    const total = this.totalLogicalLines();
-    if (total > 0) return total;
-    // Fallback to scrollbar verticalMax (logical line count in non-wrapped mode)
+    // Use scrollbar verticalMax directly — in wrapped mode this is visual row count
+    // from backend get-wrapped-line-count; in non-wrapped mode it's logical line count.
     const sb = this.activeScrollbarState();
     if (!sb) return 0;
     return sb.verticalMax;
@@ -153,18 +149,12 @@ export class ShellStateService implements OnDestroy {
     if (maxScroll <= 0) return 0;
 
     if (this.wrapMode()) {
-      // In wrapped mode, compute current visual row index
-      const lengths = this.lineLengths();
-      let visualRowIndex = 0;
-      for (let i = 0; i < state.startLine; i++) {
-        const len = lengths.get(i) ?? 0;
-        visualRowIndex += len === 0 ? 1 : Math.ceil(len / dims.colCount);
-      }
-      // Add visual rows within current line from characterOffset
-      if (state.characterOffset > 0) {
-        visualRowIndex += Math.floor(state.characterOffset / dims.colCount);
-      }
-      return visualRowIndex / maxScroll;
+      // In wrapped mode, use startLine and characterOffset with verticalMax from backend
+      // Backend resolves visual row position; approximate fraction from startLine ratio
+      const dims = this.viewDimensions();
+      if (!dims) return 0;
+      // Use startLine as visual row index (backend-resolved position tracking)
+      return state.startLine / maxScroll;
     }
 
     return state.startLine / maxScroll;
@@ -189,7 +179,7 @@ export class ShellStateService implements OnDestroy {
   private scanCompleteSubscription: SubscriptionHandle | undefined;
   private getViewSubscription: SubscriptionHandle | undefined;
   private scrollInfoSubscription: SubscriptionHandle | undefined;
-  private lineLengthsSubscription: SubscriptionHandle | undefined;
+  private wrappedLineCountSubscription: SubscriptionHandle | undefined;
 
   // --- Scrollbar polling state ---
   private scrollPollTimer: ReturnType<typeof setInterval> | null = null;
@@ -284,9 +274,9 @@ export class ShellStateService implements OnDestroy {
       this.handleScrollInfoResponse(msg);
     });
 
-    // Subscribe to get-line-lengths responses
-    this.lineLengthsSubscription = this.messageBus.subscribe('get-line-lengths', (msg: InboundMessage) => {
-      this.handleLineLengthsResponse(msg);
+    // Subscribe to get-wrapped-line-count responses
+    this.wrappedLineCountSubscription = this.messageBus.subscribe('get-wrapped-line-count', (msg: InboundMessage) => {
+      this.handleWrappedLineCountResponse(msg.payload);
     });
   }
 
@@ -295,7 +285,7 @@ export class ShellStateService implements OnDestroy {
     this.scanCompleteSubscription?.unsubscribe();
     this.getViewSubscription?.unsubscribe();
     this.scrollInfoSubscription?.unsubscribe();
-    this.lineLengthsSubscription?.unsubscribe();
+    this.wrappedLineCountSubscription?.unsubscribe();
     this.stopScrollPolling();
   }
 
@@ -364,13 +354,13 @@ export class ShellStateService implements OnDestroy {
       // Send appropriate view request based on current wrap mode
       if (this.wrapMode()) {
         this.sendWrappedViewRequest(newTab!.viewSessionId);
-        this.requestLineLengths(newTab!.viewSessionId);
+        this.requestWrappedLineCount(newTab!.viewSessionId);
       } else {
         this.sendStandardViewRequest(newTab!.viewSessionId);
       }
     } else if (this.wrapMode() && newTab) {
-      // Tab activated in wrapped mode — request line lengths for scrollbar
-      this.requestLineLengths(newTab.viewSessionId);
+      // Tab activated in wrapped mode — request wrapped line count for scrollbar
+      this.requestWrappedLineCount(newTab.viewSessionId);
       if (!newState2?.viewRows) {
         this.tryTriggerViewRequest();
       }
@@ -442,6 +432,14 @@ export class ShellStateService implements OnDestroy {
   updateViewDimensions(dims: ViewDimensions): void {
     this.viewDimensions.set(dims);
     this.tryTriggerViewRequest();
+
+    // On resize, request wrapped line count if wrap mode active
+    if (this.wrapMode()) {
+      const tab = this.activeTab();
+      if (tab) {
+        this.requestWrappedLineCount(tab.viewSessionId);
+      }
+    }
   }
 
   updateCharMetricsWidth(width: number): void {
@@ -477,8 +475,8 @@ export class ShellStateService implements OnDestroy {
     // Send appropriate view request for active tab
     if (newMode) {
       this.sendWrappedViewRequest(tab.viewSessionId);
-      // Request line lengths for wrapped-mode scrollbar computation
-      this.requestLineLengths(tab.viewSessionId);
+      // Request wrapped line count for scrollbar computation
+      this.requestWrappedLineCount(tab.viewSessionId);
     } else {
       this.sendStandardViewRequest(tab.viewSessionId);
     }
@@ -723,9 +721,9 @@ export class ShellStateService implements OnDestroy {
         this.updateTabScrollbar(sessionId, { verticalMax: 0, horizontalMax: 0, disabled: true });
       }
 
-      // Request line lengths for wrapped-mode scrollbar computation
-      if (scanState !== 'Failed' && scanState !== 'Cancelled') {
-        this.requestLineLengths(sessionId);
+      // Request wrapped line count for scrollbar computation
+      if (scanState !== 'Failed' && scanState !== 'Cancelled' && this.wrapMode()) {
+        this.requestWrappedLineCount(sessionId);
       }
     }
   }
@@ -740,70 +738,38 @@ export class ShellStateService implements OnDestroy {
     this.tabViewStates.set(updated);
   }
 
-  // --- Private: get-line-lengths handling ---
-
-  private handleLineLengthsResponse(msg: InboundMessage): void {
-    const payload = msg.payload;
-    if (payload.startsWith('ERROR:')) return;
-
-    // Empty response means no lines
-    if (payload === '') {
-      this.lineLengths.set(new Map());
-      this.totalLogicalLines.set(0);
-      return;
-    }
-
-    // Parse newline-delimited integer char lengths
-    const fields = payload.split('\n');
-    const lengths = new Map<number, number>();
-    for (let i = 0; i < fields.length; i++) {
-      const val = parseInt(fields[i], 10);
-      if (!isNaN(val)) {
-        lengths.set(i, val);
-      }
-    }
-    this.lineLengths.set(lengths);
-    this.totalLogicalLines.set(fields.length);
-
-    // Recompute scrollbar verticalMax for wrapped mode
-    this.updateWrappedScrollbarMax();
-  }
-
-  /** Send get-line-lengths request for the given session */
-  requestLineLengths(sessionId: string): void {
-    this.messageBus.send('get-line-lengths', sessionId);
-  }
-
-  /** Recompute and update scrollbar verticalMax when wrapMode is on and lineLengths are available */
-  private updateWrappedScrollbarMax(): void {
-    if (!this.wrapMode()) return;
-
-    const tab = this.activeTab();
-    if (!tab) return;
-
-    const state = this.tabViewStates().get(tab.viewSessionId);
-    if (!state) return;
-
+  /** Send get-wrapped-line-count request for the given session */
+  private requestWrappedLineCount(sessionId: string): void {
     const dims = this.viewDimensions();
     if (!dims) return;
+    const payload = `${sessionId}\n${dims.colCount}`;
+    this.messageBus.send('get-wrapped-line-count', payload);
+  }
 
-    const lengths = this.lineLengths();
-    if (lengths.size === 0) return;
-
-    // Convert Map to array for computeWrappedScrollbarMax
-    const lengthsArray: number[] = [];
-    for (let i = 0; i < this.totalLogicalLines(); i++) {
-      lengthsArray.push(lengths.get(i) ?? 0);
+  /** Handle get-wrapped-line-count response: parse and set verticalMax */
+  handleWrappedLineCountResponse(payload: string): void {
+    if (payload.startsWith('ERROR:')) {
+      const tab = this.activeTab();
+      if (!tab) return;
+      const state = this.tabViewStates().get(tab.viewSessionId);
+      if (!state) return;
+      this.updateTabScrollbar(tab.viewSessionId, {
+        verticalMax: 0,
+        horizontalMax: state.scrollbarState.horizontalMax,
+        disabled: state.scrollbarState.horizontalMax === 0,
+      });
+      return;
     }
-
-    const wrappedVerticalMax = computeWrappedScrollbarMax(lengthsArray, dims.colCount);
-    const horizontalMax = state.scrollbarState.horizontalMax;
-    const disabled = wrappedVerticalMax === 0 && horizontalMax === 0;
-
+    const value = parseInt(payload, 10);
+    const verticalMax = isNaN(value) || value < 0 ? 0 : value;
+    const tab = this.activeTab();
+    if (!tab) return;
+    const state = this.tabViewStates().get(tab.viewSessionId);
+    if (!state) return;
     this.updateTabScrollbar(tab.viewSessionId, {
-      verticalMax: wrappedVerticalMax,
-      horizontalMax,
-      disabled,
+      verticalMax,
+      horizontalMax: state.scrollbarState.horizontalMax,
+      disabled: verticalMax === 0 && state.scrollbarState.horizontalMax === 0,
     });
   }
 
@@ -817,18 +783,18 @@ export class ShellStateService implements OnDestroy {
       if (!state) return;
       const dims = this.viewDimensions();
       if (!dims) return;
+      const sb = state.scrollbarState;
+      if (sb.disabled || sb.verticalMax <= dims.rowCount) return;
 
+      const maxScroll = sb.verticalMax - dims.rowCount;
       const steps = direction === 'down' ? ARROW_STEP : -ARROW_STEP;
-      const result = scrollByVisualRows(
-        { startLine: state.startLine, characterOffset: state.characterOffset },
-        steps, dims.colCount, this.lineLengths(), this.totalLogicalLines()
-      );
+      const newStartLine = clamp(state.startLine + steps, 0, maxScroll);
 
-      if (!result.positionChanged) return;
+      if (newStartLine === state.startLine) return;
 
-      // Update state
+      // Update state — startLine is visual row index, characterOffset reset to 0
       const updated = new Map(this.tabViewStates());
-      updated.set(tab.viewSessionId, { ...state, startLine: result.startLine, characterOffset: result.characterOffset });
+      updated.set(tab.viewSessionId, { ...state, startLine: newStartLine, characterOffset: 0 });
       this.tabViewStates.set(updated);
 
       this.sendWrappedViewRequest(tab.viewSessionId);
@@ -879,18 +845,18 @@ export class ShellStateService implements OnDestroy {
       if (!state) return;
       const dims = this.viewDimensions();
       if (!dims) return;
+      const sb = state.scrollbarState;
+      if (sb.disabled || sb.verticalMax <= dims.rowCount) return;
 
+      const maxScroll = sb.verticalMax - dims.rowCount;
       const steps = deltaY > 0 ? WHEEL_STEP : -WHEEL_STEP;
-      const result = scrollByVisualRows(
-        { startLine: state.startLine, characterOffset: state.characterOffset },
-        steps, dims.colCount, this.lineLengths(), this.totalLogicalLines()
-      );
+      const newStartLine = clamp(state.startLine + steps, 0, maxScroll);
 
-      if (!result.positionChanged) return;
+      if (newStartLine === state.startLine) return;
 
-      // Update state
+      // Update state — startLine is visual row index, characterOffset reset to 0
       const updated = new Map(this.tabViewStates());
-      updated.set(tab.viewSessionId, { ...state, startLine: result.startLine, characterOffset: result.characterOffset });
+      updated.set(tab.viewSessionId, { ...state, startLine: newStartLine, characterOffset: 0 });
       this.tabViewStates.set(updated);
 
       this.sendWrappedViewRequest(tab.viewSessionId);
@@ -977,7 +943,17 @@ export class ShellStateService implements OnDestroy {
     const newPos = clamp(drag.startScrollPos + scrollDelta, 0, maxScroll);
 
     if (drag.axis === 'vertical') {
-      this.updateScrollPosition(tab.viewSessionId, newPos, undefined);
+      if (this.wrapMode()) {
+        // In wrap mode, startLine is visual row index; reset characterOffset to 0
+        const states = this.tabViewStates();
+        const existing = states.get(tab.viewSessionId);
+        if (!existing) return;
+        const updated = new Map(states);
+        updated.set(tab.viewSessionId, { ...existing, startLine: newPos, characterOffset: 0 });
+        this.tabViewStates.set(updated);
+      } else {
+        this.updateScrollPosition(tab.viewSessionId, newPos, undefined);
+      }
     } else {
       this.updateScrollPosition(tab.viewSessionId, undefined, newPos);
     }
@@ -993,7 +969,11 @@ export class ShellStateService implements OnDestroy {
     const state = this.tabViewStates().get(tab.viewSessionId);
     if (!state) return;
 
-    this.sendScrollViewRequest(tab.viewSessionId, state.startLine, state.startCol);
+    if (this.wrapMode() && drag.axis === 'vertical') {
+      this.sendWrappedViewRequest(tab.viewSessionId);
+    } else {
+      this.sendScrollViewRequest(tab.viewSessionId, state.startLine, state.startCol);
+    }
   }
 
   // --- Private: scroll position update ---
