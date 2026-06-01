@@ -36,6 +36,7 @@ public class Program
         var appLifetimeCts = new CancellationTokenSource();
         var sessions = new Dictionary<string, FileViewService>();
         var sessionLock = new object(); // guards dictionary access from handler + scan-monitor
+        var wrappedLineCountCache = new Dictionary<string, (int colCount, int lineCount, long total)>();
 
         messageBus.RegisterHandler("open-file", async (correlationId, payload) =>
         {
@@ -92,7 +93,7 @@ public class Program
 
         messageBus.RegisterHandler("close-file", (correlationId, payload) =>
         {
-            HandleCloseFile(payload, sessions, sessionLock);
+            HandleCloseFile(payload, sessions, sessionLock, wrappedLineCountCache);
             return Task.FromResult<string?>(null); // fire-and-forget
         });
 
@@ -101,9 +102,9 @@ public class Program
             return Task.FromResult<string?>(HandleGetScrollInfo(payload, sessions, sessionLock));
         });
 
-        messageBus.RegisterHandler("get-line-lengths", (correlationId, payload) =>
+        messageBus.RegisterHandler("get-wrapped-line-count", (correlationId, payload) =>
         {
-            return Task.FromResult<string?>(HandleGetLineLengths(payload, sessions, sessionLock));
+            return Task.FromResult<string?>(HandleGetWrappedLineCount(payload, sessions, sessionLock, wrappedLineCountCache));
         });
 
         messageBus.RegisterHandler("exit", (correlationId, payload) =>
@@ -184,8 +185,13 @@ public class Program
             if (service is null)
                 return "ERROR: Session not found";
 
+            // Resolve visual row index to (startLine, characterOffset)
+            var lineIndex = service.LineIndex;
+            var lineCount = lineIndex.LineCount;
+            var resolved = ResolveVisualRowIndex(lineIndex, lineCount, wrappedColCount, startLine);
+
             var result = await service.GetWrappedViewAsync(
-                startLine, charOffset, charCount, wrappedColCount);
+                resolved.startLine, resolved.characterOffset, charCount, wrappedColCount);
             if (!result.IsSuccess)
                 return result.Error.Message;
 
@@ -243,7 +249,8 @@ public class Program
     internal static void HandleCloseFile(
         string payload,
         Dictionary<string, FileViewService> sessions,
-        object sessionLock)
+        object sessionLock,
+        Dictionary<string, (int colCount, int lineCount, long total)> wrappedLineCountCache)
     {
         var viewSessionId = payload;
         lock (sessionLock)
@@ -253,6 +260,7 @@ public class Program
                 service.Dispose();
             }
         }
+        wrappedLineCountCache.Remove(viewSessionId);
     }
 
     /// <summary>
@@ -288,51 +296,66 @@ public class Program
         return $"{scanState}\n{lineCount}\n{maxByteLength}\n{maxCharLength}";
     }
 
+
+
     /// <summary>
-    /// Handles "get-line-lengths" message: looks up session, returns newline-delimited
-    /// list of integer char lengths (one per logical line, content length excluding delimiter).
-    /// Uses GetCharLength from LineIndex; falls back to GetByteLength if char length not yet computed.
-    /// Extracted for testability.
+    /// Handles "get-wrapped-line-count" message: parses payload, validates session and colCount,
+    /// checks cache, computes if needed, returns total as string.
     /// </summary>
-    internal static string HandleGetLineLengths(
+    internal static string HandleGetWrappedLineCount(
         string payload,
         Dictionary<string, FileViewService> sessions,
-        object sessionLock)
+        object sessionLock,
+        Dictionary<string, (int colCount, int lineCount, long total)> wrappedLineCountCache)
     {
-        var viewSessionId = payload;
+        var newlineIdx = payload.IndexOf('\n');
+        if (newlineIdx == -1) return "ERROR: Invalid payload";
+
+        var sessionId = payload[..newlineIdx];
 
         FileViewService? service;
-        lock (sessionLock)
-        {
-            sessions.TryGetValue(viewSessionId, out service);
-        }
+        lock (sessionLock) { sessions.TryGetValue(sessionId, out service); }
+        if (service is null) return $"ERROR: Session not found: {sessionId}";
 
-        if (service is null)
-            return $"ERROR:Session not found: {viewSessionId}";
+        if (!int.TryParse(payload[(newlineIdx + 1)..], out var colCount) || colCount < 1)
+            return "ERROR: colCount must be >= 1";
 
         var lineIndex = service.LineIndex;
         var lineCount = lineIndex.LineCount;
 
-        if (lineCount == 0)
-            return "";
-
-        var sb = new StringBuilder();
-        for (int i = 0; i < lineCount; i++)
+        // Cache check
+        if (wrappedLineCountCache.TryGetValue(sessionId, out var cached)
+            && cached.colCount == colCount && cached.lineCount == lineCount)
         {
-            if (i > 0) sb.Append('\n');
-            var charLen = lineIndex.GetCharLength(i);
-            if (charLen.HasValue)
-            {
-                sb.Append(charLen.Value);
-            }
-            else
-            {
-                // Fallback to byte length if char length not yet computed
-                sb.Append(lineIndex.GetByteLength(i));
-            }
+            return cached.total.ToString();
         }
 
-        return sb.ToString();
+        // Compute and cache
+        long total = ComputeWrappedLineCount(lineIndex, lineCount, colCount);
+        wrappedLineCountCache[sessionId] = (colCount, lineCount, total);
+        return total.ToString();
+    }
+
+    /// <summary>
+    /// Computes total visual row count across all lines using parallel iteration.
+    /// Each line: if charLen is null, fall back to byte length; if length == 0 → 1 visual row;
+    /// else ceil(len / colCount).
+    /// </summary>
+    internal static long ComputeWrappedLineCount(LineIndex lineIndex, int lineCount, int colCount)
+    {
+        if (lineCount == 0) return 0;
+
+        long total = 0;
+        Parallel.For(0, lineCount, () => 0L, (i, _, subtotal) =>
+        {
+            var charLen = lineIndex.GetCharLength(i);
+            long len = (long)(charLen ?? lineIndex.GetByteLength(i));
+            subtotal += len == 0 ? 1 : (len + colCount - 1) / colCount;
+            return subtotal;
+        },
+        subtotal => Interlocked.Add(ref total, subtotal));
+
+        return total;
     }
 
     /// <summary>
@@ -354,6 +377,41 @@ public class Program
             }
         }
         return (rowCount, colCount);
+    }
+
+    /// <summary>
+    /// Resolves a zero-based visual row index to (startLine, characterOffset).
+    /// Iterates lines summing visual rows until cumulative sum exceeds target.
+    /// Clamps to last visual row when index exceeds total; returns (0, 0) when lineCount == 0 or visualRowIndex == 0.
+    /// </summary>
+    internal static (int startLine, int characterOffset) ResolveVisualRowIndex(
+        LineIndex lineIndex, int lineCount, int colCount, long visualRowIndex)
+    {
+        if (lineCount == 0 || visualRowIndex == 0)
+            return (0, 0);
+
+        long cumulative = 0;
+        for (int i = 0; i < lineCount; i++)
+        {
+            var charLen = lineIndex.GetCharLength(i);
+            long len = (long)(charLen ?? lineIndex.GetByteLength(i));
+            long visualRows = len == 0 ? 1 : (len + colCount - 1) / colCount;
+
+            if (cumulative + visualRows > visualRowIndex)
+            {
+                long rowWithinLine = visualRowIndex - cumulative;
+                int characterOffset = (int)(rowWithinLine * colCount);
+                return (i, characterOffset);
+            }
+            cumulative += visualRows;
+        }
+
+        // Clamp to last visual row
+        var lastCharLen = lineIndex.GetCharLength(lineCount - 1);
+        long lastLineLen = (long)(lastCharLen ?? lineIndex.GetByteLength(lineCount - 1));
+        long lastVisualRows = lastLineLen == 0 ? 1 : (lastLineLen + colCount - 1) / colCount;
+        int lastOffset = (int)((lastVisualRows - 1) * colCount);
+        return (lineCount - 1, lastOffset);
     }
 
     /// <summary>

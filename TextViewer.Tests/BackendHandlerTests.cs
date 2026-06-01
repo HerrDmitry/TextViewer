@@ -538,7 +538,7 @@ public class BackendHandlerTests : IDisposable
         await WaitForScan(service);
 
         // Act
-        Program.HandleCloseFile(sessionId, sessions, _sessionLock);
+        Program.HandleCloseFile(sessionId, sessions, _sessionLock, new Dictionary<string, (int colCount, int lineCount, long total)>());
 
         // Assert
         Assert.DoesNotContain(sessionId, sessions.Keys);
@@ -556,7 +556,7 @@ public class BackendHandlerTests : IDisposable
         var sessions = new Dictionary<string, FileViewService>();
 
         // Should not throw
-        Program.HandleCloseFile("non-existent-session", sessions, _sessionLock);
+        Program.HandleCloseFile("non-existent-session", sessions, _sessionLock, new Dictionary<string, (int colCount, int lineCount, long total)>());
 
         Assert.Empty(sessions);
     }
@@ -583,7 +583,7 @@ public class BackendHandlerTests : IDisposable
         await WaitForScan(service2);
 
         // Act - close session 1
-        Program.HandleCloseFile(sessionId1, sessions, _sessionLock);
+        Program.HandleCloseFile(sessionId1, sessions, _sessionLock, new Dictionary<string, (int colCount, int lineCount, long total)>());
 
         // Assert - session 2 still exists
         Assert.DoesNotContain(sessionId1, sessions.Keys);
@@ -708,7 +708,7 @@ public class BackendHandlerTests : IDisposable
         Assert.StartsWith("1\t", result2!.Split('\n')[0]);
 
         // Close one session, other still works
-        Program.HandleCloseFile(sessionId1, sessions, _sessionLock);
+        Program.HandleCloseFile(sessionId1, sessions, _sessionLock, new Dictionary<string, (int colCount, int lineCount, long total)>());
 
         var result2AfterClose = await Program.HandleGetView(payload2, sessions, _sessionLock);
         Assert.DoesNotContain("ERROR:", result2AfterClose!);

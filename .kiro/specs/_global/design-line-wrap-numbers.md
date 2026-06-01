@@ -66,7 +66,7 @@ sequenceDiagram
 5. **Backend computes line numbers** — eliminates race conditions between scroll state and response content; frontend reads gutterNumbers directly from response
 6. **6-field wrapped request** — includes colCount so backend can compute per-visual-row line numbers matching frontend's splitIntoVisualRows logic
 7. **Frontend splits response into Visual_Rows** — backend returns flat content; frontend splits at Col_Count boundaries and newlines
-8. **Scrollbar_Max in wrapped mode from line metadata** — `get-line-lengths` message provides per-line char lengths; frontend computes sum(ceil(len/colCount))
+8. **Scrollbar_Max in wrapped mode from backend** — `get-wrapped-line-count` handler returns total visual rows as single integer; frontend sets verticalMax directly. See `design-wrapped-line-count.md` for full protocol.
 9. **No word wrap** — hard wrap at exact Col_Count boundary
 10. **Empty gutter cells use non-breaking space** — prevents height collapse in wrapped mode continuation rows
 
@@ -129,13 +129,17 @@ export interface TabViewState {
 
 ```typescript
 readonly wrapMode = signal<boolean>(false);
+readonly charMetricsWidth = signal<number>(0);
 readonly activeGutterNumbers = computed<(number | null)[]>(() => {
   const state = this.activeTabViewState();
   if (!state) return [];
   return state.gutterNumbers ?? [];
 });
 readonly activeGutterWidth = computed(() => computeGutterWidth(totalLines, charWidth));
+readonly activeTotalLogicalLines = computed(() => sb.verticalMax);  // verticalMax = visual rows in wrapped mode
 ```
+
+Note: `lineLengths` and `totalLogicalLines` signals removed — replaced by backend `get-wrapped-line-count`. See `design-wrapped-line-count.md`.
 
 ### Pure Functions (line-wrap-utils.ts)
 
@@ -143,13 +147,10 @@ readonly activeGutterWidth = computed(() => computeGutterWidth(totalLines, charW
 computeGutterWidth(totalLogicalLines, charWidth): number
 computeColCount(availablePixelWidth, gutterWidth, charWidth): number
 splitIntoVisualRows(content, colCount): string[]
-computeWrappedScrollbarMax(lineLengths, colCount): number
-scrollDownOneVisualRow(state, colCount, lineLengths, totalLogicalLines): ScrollResult
-scrollUpOneVisualRow(state, colCount, lineLengths): ScrollResult
-scrollByVisualRows(state, steps, colCount, lineLengths, totalLogicalLines): ScrollResult
+computeWrappedGutterNumbers(content, colCount, startLine, characterOffset): (number | null)[]
 ```
 
-Note: `computeNonWrappedLineNumbers` and `computeWrappedGutterNumbers` exist but are dead code (kept for test reference only). Production code reads `gutterNumbers` from backend response.
+Note: `computeWrappedGutterNumbers` exists but is dead code (kept for test reference only). Production code reads `gutterNumbers` from backend response. Wrapped scrollbar max and scroll-by-visual-row logic moved to backend — see `design-wrapped-line-count.md`.
 
 ### Backend: ViewResult
 
@@ -218,10 +219,11 @@ Wrapped: extract `L:` header (first `\n`), parse comma-separated → gutterNumbe
 
 ### Wrapped-Mode Scroll Logic
 
-- `scrollDownOneVisualRow`: offset += colCount; if ≥ lineLen → next line, offset=0; boundary guard at last line
-- `scrollUpOneVisualRow`: offset -= colCount; if < 0 → previous line's last wrapped row; boundary guard at line 0
-- `scrollByVisualRows`: iterative N steps, stops at boundary
-- Wheel = ±3 Visual_Rows; Arrow = ±1 Visual_Row
+Scroll navigation uses visual row index directly. Frontend stores `startLine` as visual row index in wrapped mode, sends it in get-view request. Backend resolves to (startLine, characterOffset) via `ResolveVisualRowIndex`. See `design-wrapped-line-count.md` for details.
+
+- Arrow key: clamp(startLine ± 1, 0, verticalMax - rowCount)
+- Wheel: clamp(startLine ± 3, 0, verticalMax - rowCount)
+- Drag: proportional position → visual row index
 
 ## Correctness Properties
 
@@ -229,11 +231,11 @@ Wrapped: extract `L:` header (first `\n`), parse comma-separated → gutterNumbe
 2. **Preservation** — non-gutter behavior unchanged (request formats, scrollbar computation, error handling, row content display, tab lifecycle)
 3. **Gutter Width Computation** — for any totalLines ≥ 1 and charWidth > 0: result = digits(totalLines) × charWidth + 16
 4. **splitIntoVisualRows** — every row ≤ colCount chars, no row contains newlines, empty content → empty array
-5. **Wrapped Scroll Position** — scrollDown then scrollUp returns to original position (when not at boundary)
+5. **Wrapped Scroll Position** — scroll actions clamp visual row index within [0, verticalMax - rowCount]
 6. **Backend Wrapped Content-Count Invariant** — response contains at most characterCount content chars (excluding delimiters)
 7. **Backend Wrapped Parameter Validation** — invalid params → error string starting with "ERROR:"
 8. **Wrapped Request Payload Round-Trip** — encode then parse recovers original values
-9. **Wrapped Scrollbar_Max** — equals sum of ceil(len/colCount) for len > 0 plus 1 for len = 0
+9. **Wrapped Scrollbar_Max** — equals backend-computed total visual rows via `get-wrapped-line-count` (see `design-wrapped-line-count.md` Property 1)
 10. **Col_Count with Gutter** — equals max(1, floor((pixelWidth - gutterWidth) / charWidth))
 
 ## Testing Strategy

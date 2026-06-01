@@ -32,8 +32,10 @@ export class TextViewAreaComponent implements AfterViewInit, OnDestroy {
   readonly horizontalThumbFraction = this.state.horizontalThumbFraction;
 
   private resizeObserver: ResizeObserver | null = null;
+  private gutterResizeObserver: ResizeObserver | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private lastDimensions: ViewDimensions | null = null;
+  private observedGutterEl: HTMLElement | null = null;
 
   ngAfterViewInit(): void {
     this.setupResizeObserver();
@@ -42,6 +44,8 @@ export class TextViewAreaComponent implements AfterViewInit, OnDestroy {
   ngOnDestroy(): void {
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
+    this.gutterResizeObserver?.disconnect();
+    this.gutterResizeObserver = null;
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
       this.debounceTimer = null;
@@ -62,6 +66,8 @@ export class TextViewAreaComponent implements AfterViewInit, OnDestroy {
     this.resizeObserver.observe(host);
   }
 
+  private static readonly SCROLLBAR_THICKNESS = 14;
+
   private measure(): void {
     const host = this.el.nativeElement as HTMLElement;
     const pixelWidth = host.clientWidth;
@@ -71,15 +77,31 @@ export class TextViewAreaComponent implements AfterViewInit, OnDestroy {
     if (pixelWidth === 0 || pixelHeight === 0) return;
 
     const charMetrics = this.computeCharMetrics();
-    const rowCount = Math.max(1, Math.floor(pixelHeight / charMetrics.height));
 
-    // Subtract gutter width from available width for Col_Count (Req 9.1, 9.3, 9.4)
-    const gutterEl = this.gutterEl?.nativeElement;
-    const gutterWidth = gutterEl ? gutterEl.clientWidth : 0;
-    const colCount = Math.max(1, Math.floor((pixelWidth - gutterWidth) / charMetrics.width));
+    // Subtract scrollbar thickness from available dimensions
+    const verticalScrollbarWidth = TextViewAreaComponent.SCROLLBAR_THICKNESS;
+    const horizontalScrollbarHeight = this.state.wrapMode() ? 0 : TextViewAreaComponent.SCROLLBAR_THICKNESS;
 
-    // Report char metrics width for gutter width calculation
+    const availableHeight = pixelHeight - horizontalScrollbarHeight;
+    const rowCount = Math.max(1, Math.floor(availableHeight / charMetrics.height));
+
+    // Report char metrics width BEFORE reading gutter width signal
+    // (activeGutterWidth depends on charMetricsWidth signal)
     this.state.updateCharMetricsWidth(charMetrics.width);
+
+    // Subtract gutter width and vertical scrollbar from available width for Col_Count
+    // Read gutter width from DOM if available; observe gutter for resize to re-measure
+    const gutterEl = this.gutterEl?.nativeElement;
+    if (gutterEl && gutterEl !== this.observedGutterEl) {
+      this.observedGutterEl = gutterEl;
+      if (!this.gutterResizeObserver) {
+        this.gutterResizeObserver = new ResizeObserver(() => this.measure());
+      }
+      this.gutterResizeObserver.observe(gutterEl);
+    }
+    const gutterWidth = gutterEl ? gutterEl.clientWidth : 0;
+    const availableWidth = pixelWidth - gutterWidth - verticalScrollbarWidth;
+    const colCount = Math.max(1, Math.floor(availableWidth / charMetrics.width));
 
     const dims: ViewDimensions = { rowCount, colCount };
 
