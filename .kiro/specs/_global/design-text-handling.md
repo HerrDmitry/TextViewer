@@ -10,11 +10,11 @@ Text Handling connects the UI Shell's Text_View_Area to the backend FileViewServ
 - **Initial_View in open-file response** — backend waits 500ms after creating FileViewService, calls GetViewAsync with viewport dimensions from the request, includes rows in the response for immediate rendering
 - **Measurement pipeline** — computes Row_Count/Col_Count from pixel dimensions and monospace Char_Metrics
 - **View request orchestration** — state machine gating refresh requests on (active tab + scan-complete + measurement)
-- **Scan-complete notification** — single backend push at FullScanComplete state triggers frontend refresh
+- **Scan-complete notification** — single backend push at ScanComplete state triggers frontend refresh
 - **Get-view handler** — backend parses request, invokes FileViewService.GetViewAsync, returns rows
 - **Row rendering** — TextViewAreaComponent displays rows with per-tab caching
 - **Session lifecycle** — create on open, dispose on close, keyed by View_Session_ID
-- **Scrollbar range tracking** — vertical scrollbar max = total line count, horizontal scrollbar max = max byte_length (quick scan) or max char_length (full scan), progressively updated during scan
+- **Scrollbar range tracking** — vertical scrollbar max = total line count, horizontal scrollbar max = max byte_length (during scan) or max char_length (scan complete), progressively updated during scan
 - **Progressive scrollbar polling** — 100ms interval polling during active scans, with scan-state-aware source selection and tab-switch lifecycle management
 - **Get-scroll-info handler** — backend message returning current line count, max byte_length, max char_length, and scan state for a session
 
@@ -47,7 +47,7 @@ sequenceDiagram
     Note over MBH,FVS: Scan continues in background...
 
     MBH->>MBH: MonitorScanState polls ScanState
-    FVS->>FVS: scan reaches FullScanComplete
+    FVS->>FVS: scan reaches ScanComplete
     MBH->>MBC: Backend_Push "scan-complete" (View_Session_ID)
     SSS->>SSS: mark scanComplete for session
 
@@ -113,9 +113,9 @@ sequenceDiagram
 ```mermaid
 stateDiagram-v2
     [*] --> Idle: tab created
-    Idle --> Polling: observe QuickScanInProgress
+    Idle --> Polling: observe ScanInProgress
     Polling --> Polling: 100ms tick (update scrollbars)
-    Polling --> FinalUpdate: QuickScanComplete or FullScanComplete
+    Polling --> FinalUpdate: ScanComplete
     Polling --> Stopped: Failed or Cancelled
     Polling --> SwitchedAway: active tab changes
     FinalUpdate --> Idle: final values set
@@ -124,8 +124,8 @@ stateDiagram-v2
 
     note right of Polling
         Horizontal source:
-        QuickScanInProgress → max byte_length
-        FullScanInProgress → max char_length
+        ScanInProgress → maxByteLength
+        ScanComplete → maxCharLength
     end note
 ```
 
@@ -143,9 +143,9 @@ stateDiagram-v2
 
 6. **Session map in Program.cs** — `Dictionary<string, FileViewService>` in closure scope of Program.Main. Simple, no DI needed — matches existing handler registration pattern.
 
-7. **Scan-complete via ScanState polling** — FileViewService exposes `ScanState` (volatile read from FileIndex). Open-file handler starts background task polling ScanState, sends single "scan-complete" push at FullScanComplete.
+7. **Scan-complete via ScanState polling** — FileViewService exposes `ScanState` (volatile read from FileIndex). Open-file handler starts background task polling ScanState, sends single "scan-complete" push at ScanComplete.
 
-8. **Accumulate queue for scan-complete** — Configured as accumulate mode so FullScanComplete notification delivered reliably (not latest-wins which could drop it).
+8. **Accumulate queue for scan-complete** — Configured as accumulate mode so ScanComplete notification delivered reliably (not latest-wins which could drop it).
 
 9. **500ms delay for Initial_View** — Open-file handler awaits `Task.Delay(500)` after creating FileViewService, giving scan time to index initial content. Then calls `GetViewAsync(0, 0, rowCount, colCount)` using viewport dimensions from request payload.
 
@@ -153,7 +153,7 @@ stateDiagram-v2
 
 11. **Scrollbar polling via "get-scroll-info" message** — Frontend polls at 100ms intervals during active scans rather than backend pushing. Avoids backend timer complexity; frontend controls update cadence. Backend handler is stateless — reads current LineIndex snapshot on each call.
 
-12. **Scan-state-aware horizontal source** — During QuickScanInProgress, horizontal scrollbar uses max byte_length (char_length not yet computed). During FullScanInProgress/FullScanComplete, uses max char_length. Backend returns both; frontend selects based on reported scan state.
+12. **Scan-state-aware horizontal source** — During ScanInProgress, horizontal scrollbar uses max byte_length (best available approximation). At ScanComplete, uses max char_length (final). Backend returns both; frontend selects based on reported scan state.
 
 13. **Per-tab polling lifecycle** — Polling tied to active tab. On tab switch, polling stops for old tab and starts for new tab if its scan still in progress. Prevents background polling for inactive tabs.
 
@@ -208,10 +208,8 @@ export interface ScrollInfo {
 
 export type ScanStateValue =
   | 'NotStarted'
-  | 'QuickScanInProgress'
-  | 'QuickScanComplete'
-  | 'FullScanInProgress'
-  | 'FullScanComplete'
+  | 'ScanInProgress'
+  | 'ScanComplete'
   | 'Failed'
   | 'Cancelled';
 ```
@@ -445,7 +443,7 @@ private handleScrollInfoResponse(msg: InboundMessage): void {
   if (!sessionId) return;
   this.updateTabScrollbar(sessionId, { verticalMax, horizontalMax, disabled });
 
-  if (['QuickScanComplete', 'FullScanComplete', 'Failed', 'Cancelled'].includes(scanState)) {
+  if (['ScanComplete', 'Failed', 'Cancelled'].includes(scanState)) {
     this.stopScrollPolling();
     if (scanState === 'Failed' || scanState === 'Cancelled') {
       this.updateTabScrollbar(sessionId, { verticalMax: 0, horizontalMax: 0, disabled: true });
@@ -457,11 +455,9 @@ function computeHorizontalMax(
   scanState: ScanStateValue, maxByteLength: number, maxCharLength: number
 ): number {
   switch (scanState) {
-    case 'QuickScanInProgress':
-    case 'QuickScanComplete':
+    case 'ScanInProgress':
       return maxByteLength;
-    case 'FullScanInProgress':
-    case 'FullScanComplete':
+    case 'ScanComplete':
       return maxCharLength;
     default:
       return 0;
@@ -473,7 +469,7 @@ function computeHorizontalMax(
 
 | Trigger | Action |
 |---------|--------|
-| open-file response received | Start polling for new session (scan starts in QuickScanInProgress) |
+| open-file response received | Start polling for new session (scan starts in ScanInProgress) |
 | active tab changes to tab with scan in progress | Start polling for new active tab's session |
 | active tab changes to tab with scan complete | Stop polling; scrollbar values already cached in TabViewState |
 | get-scroll-info response with terminal scan state | Stop polling; set final values (or zero on Failed/Cancelled) |
@@ -600,7 +596,7 @@ static async Task MonitorScanState(
     {
         await Task.Delay(50);
         var state = service.ScanState;
-        if (state >= ScanState.FullScanComplete)
+        if (state >= ScanState.ScanComplete)
         {
             messageBus.Send("scan-complete", viewSessionId);
             break;
@@ -639,7 +635,7 @@ messageBus.RegisterHandler("get-scroll-info", (correlationId, payload) =>
 
     // O(1) cached max values from LineIndex
     ulong maxByteLength = lineIndex.MaxByteLength;
-    ulong maxCharLength = lineIndex.MaxCharLength ?? 0;
+    ulong maxCharLength = lineIndex.MaxCharLength;
 
     return Task.FromResult<string?>(
         $"{scanState}\n{lineCount}\n{maxByteLength}\n{maxCharLength}");
@@ -710,7 +706,7 @@ Single field: `{View_Session_ID}` (no newlines).
 | scanState | 0 | string | ScanState enum name |
 | lineCount | 1 | int | Total lines discovered so far |
 | maxByteLength | 2 | ulong | Max byte_length across all discovered lines |
-| maxCharLength | 3 | ulong | Max char_length across lines with char_length computed (0 if none) |
+| maxCharLength | 3 | ulong | Max char_length across all discovered lines |
 
 **Error:** `ERROR:Session not found: {viewSessionId}`
 
@@ -719,10 +715,8 @@ Single field: `{View_Session_ID}` (no newlines).
 | ScanState | Vertical Max | Horizontal Max |
 |-----------|-------------|----------------|
 | NotStarted | 0 | 0 |
-| QuickScanInProgress | lineCount (current) | maxByteLength (current) |
-| QuickScanComplete | lineCount (final) | maxByteLength (final, interim) |
-| FullScanInProgress | lineCount (final) | maxCharLength (current) |
-| FullScanComplete | lineCount (final) | maxCharLength (final) |
+| ScanInProgress | lineCount (current) | maxByteLength (current) |
+| ScanComplete | lineCount (final) | maxCharLength (final) |
 | Failed | 0 | 0 |
 | Cancelled | 0 | 0 |
 
@@ -820,19 +814,19 @@ computeCharMetrics():
 
 ### Property 9: Vertical scrollbar invariant
 
-*For any* active session with scan data available (ScanState ≥ QuickScanInProgress and not Failed/Cancelled), the vertical scrollbar max SHALL equal the current LineCount from the FileIndex Line_Index. When the active tab changes, the vertical scrollbar max SHALL immediately reflect the new active tab's session line count. When LineCount is zero, the scrollbar SHALL be disabled.
+*For any* active session with scan data available (ScanState = ScanInProgress or ScanComplete), the vertical scrollbar max SHALL equal the current LineCount from the FileIndex Line_Index. When the active tab changes, the vertical scrollbar max SHALL immediately reflect the new active tab's session line count. When LineCount is zero, the scrollbar SHALL be disabled.
 
 **Validates: Requirements 9.1, 9.2, 9.3, 9.4, 9.5**
 
 ### Property 10: Horizontal scrollbar source selection
 
-*For any* active session, the horizontal scrollbar max SHALL equal max byte_length across all discovered lines when ScanState is QuickScanInProgress or QuickScanComplete, and SHALL equal max char_length across all lines when ScanState is FullScanInProgress or FullScanComplete. When the active tab changes, the horizontal scrollbar max SHALL immediately reflect the new active tab's session max width using the appropriate source for that session's scan state. When the max width is zero, the scrollbar SHALL be disabled.
+*For any* active session, the horizontal scrollbar max SHALL equal max byte_length across all discovered lines when ScanState is ScanInProgress, and SHALL equal max char_length across all lines when ScanState is ScanComplete. When the active tab changes, the horizontal scrollbar max SHALL immediately reflect the new active tab's session max width using the appropriate source for that session's scan state. When the max width is zero, the scrollbar SHALL be disabled.
 
 **Validates: Requirements 10.1, 10.2, 10.3, 10.4, 10.5, 10.6, 10.7**
 
 ### Property 11: Progressive polling lifecycle
 
-*For any* sequence of scan state transitions and tab switches, the frontend SHALL poll at 100ms intervals if and only if the active tab's session ScanState is QuickScanInProgress or FullScanInProgress. Polling SHALL start when a tab becomes active with an in-progress scan. Polling SHALL stop when the scan reaches a terminal state (QuickScanComplete, FullScanComplete, Failed, Cancelled) or when the active tab changes. When the scan transitions from QuickScanInProgress to FullScanInProgress, polling SHALL continue without interruption and the horizontal source SHALL switch from max byte_length to max char_length.
+*For any* sequence of scan state transitions and tab switches, the frontend SHALL poll at 100ms intervals if and only if the active tab's session ScanState is ScanInProgress. Polling SHALL start when a tab becomes active with an in-progress scan. Polling SHALL stop when the scan reaches a terminal state (ScanComplete, Failed, Cancelled) or when the active tab changes.
 
 **Validates: Requirements 11.1, 11.2, 11.3, 11.4, 11.5, 11.6**
 
@@ -880,8 +874,8 @@ computeCharMetrics():
 | 7: Open-file response round-trip | Random viewSessionId, filePath (no newlines), random row arrays (0–50 rows) | encode → parse recovers exactly |
 | 8: Open-file request payload round-trip | Random rowCount (1–2^31-1), colCount (1–2^31-1) | encode → parse recovers; empty/malformed → fallback (40, 120) |
 | 9: Vertical scrollbar invariant | Random sequences of {scanProgress, scanComplete, tabSwitch, tabClose} (length 1–15) | Vertical max = active tab's lineCount; zero → disabled |
-| 10: Horizontal scrollbar source | Random scan state transitions with random byte/char lengths | Horizontal max = byte_length during QuickScan, char_length during FullScan |
-| 11: Progressive polling lifecycle | Random sequences of {startScan, progressScan, completeScan, failScan, switchTab} (length 1–20) | Polling active iff active tab in InProgress; stops on terminal/tab-switch |
+| 10: Horizontal scrollbar source | Random scan state transitions with random byte/char lengths | Horizontal max = byte_length during ScanInProgress, char_length during ScanComplete |
+| 11: Progressive polling lifecycle | Random sequences of {startScan, progressScan, completeScan, failScan, switchTab} (length 1–20) | Polling active iff active tab in ScanInProgress; stops on terminal/tab-switch |
 | 12: Get-scroll-info response round-trip | Random ScanState names, random lineCount, maxByteLength, maxCharLength | encode → parse recovers |
 
 **Backend test file:** Property tests for payload parsing, response encoding, open-file response format, and get-scroll-info response format in xUnit + FsCheck (`[Property(MaxTest = 10)]`).
@@ -914,9 +908,8 @@ computeCharMetrics():
 | Scrollbar polling stops on scan-complete | Req 11.2, 11.4 |
 | Scrollbar polling stops on tab close | Req 11.5 |
 | Tab switch stops old polling, starts new if in progress | Req 11.5 |
-| Horizontal max uses byte_length during QuickScanInProgress | Req 10.3 |
-| Horizontal max uses char_length during FullScanInProgress | Req 10.4 |
-| Horizontal source transitions at QuickScan→FullScan boundary | Req 11.3 |
+| Horizontal max uses byte_length during ScanInProgress | Req 10.3 |
+| Horizontal max uses char_length at ScanComplete | Req 10.4 |
 | Vertical scrollbar max = lineCount from response | Req 9.1, 9.3 |
 | Scrollbar disabled when both max values are zero | Req 9.4, 10.6 |
 | Failed/Cancelled scan → scrollbar max set to zero | Req 11.6 |
@@ -938,15 +931,15 @@ computeCharMetrics():
 | open-file returns empty Initial_View when GetViewAsync fails | Req 8.5 |
 | close-file disposes service and removes from map | Req 7.5 |
 | close-file with unknown session → no-op | Req 7.6 |
-| scan-complete sent only at FullScanComplete | Req 3.1 |
+| scan-complete sent only at ScanComplete | Req 3.1 |
 | scan-complete is Backend_Push (messageBus.Send) | Req 3.2 |
 | Multiple opens of same file → independent sessions | Req 7.3 |
 | get-scroll-info with valid session → correct response format | Req 9.1, 10.1 |
 | get-scroll-info with unknown session → ERROR | Req 9.1 |
-| get-scroll-info during QuickScanInProgress → lineCount and maxByteLength reflect progress | Req 9.3, 10.3 |
-| get-scroll-info during FullScanInProgress → maxCharLength reflects progress | Req 10.4 |
+| get-scroll-info during ScanInProgress → lineCount and maxByteLength reflect progress | Req 9.3, 10.3 |
+| get-scroll-info at ScanComplete → maxCharLength reflects final values | Req 10.4 |
 | get-scroll-info for empty file → lineCount=0, maxByteLength=0, maxCharLength=0 | Req 9.4, 10.6 |
-| get-scroll-info at FullScanComplete → final values | Req 9.2, 10.2 |
+| get-scroll-info at ScanComplete → final values | Req 9.2, 10.2 |
 
 ### Integration Tests
 

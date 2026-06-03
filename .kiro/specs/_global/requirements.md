@@ -16,7 +16,7 @@ TextViewer is a cross-platform desktop application for viewing text content. Thi
 ## Glossary
 
 - **Open_File_Dialog**: The native operating system file-selection dialog provided by the OS
-- **FileIndex**: C# class orchestrating two-phase file scanning (see `requirements-file-index.md` for full glossary)
+- **FileIndex**: C# class orchestrating unified single-pass file scanning (see `requirements-file-index.md` for full glossary)
 - **Line_Index**: Per-line length metadata store within FileIndex (see `requirements-file-index.md`)
 - **Status_Display**: UI region beside file name showing scan metrics (see `requirements-file-index.md`)
 - **File_View_Service**: C# backend service producing rectangular text views (see `requirements-file-view-service.md` for full glossary)
@@ -72,17 +72,17 @@ Full spec in `requirements-viewer-ui-shell.md`. Summary:
 5. THE UI_Shell SHALL display Empty_State_Prompt ("Ctrl-O to open a file") when no tabs open
 6. THE UI_Shell SHALL display active file path in Status_Bar
 
-### Requirement 4: File Index — Two-Phase Scanning
+### Requirement 4: File Index — Unified Single-Pass Scanning
 
-**User Story:** As a user, I want opened files to be scanned for line metadata, so that line count and length metrics are available progressively.
+**User Story:** As a user, I want opened files to be scanned once for all line metadata, so that metrics are available immediately upon completion.
 
 #### Acceptance Criteria
 
-1. WHEN a file is selected, THE application SHALL perform Quick_Scan (byte lengths) then Full_Scan (char lengths) automatically — full spec in `requirements-file-index.md`
+1. WHEN a file is selected, THE application SHALL perform a single unified scan pass computing both byte lengths AND char lengths simultaneously — full spec in `requirements-file-index.md`
 2. THE FileIndex SHALL open files non-exclusively (FileShare.ReadWrite, FileAccess.Read)
 3. THE Line_Index SHALL be thread-safe (single writer, multiple concurrent readers, no torn reads)
 4. THE Line_Index SHALL use memory-compact segmented storage with tiered integer widths
-5. THE FileIndex SHALL expose ScanState and Error as thread-safe polling fields
+5. THE FileIndex SHALL expose ScanState (NotStarted/ScanInProgress/ScanComplete/Failed/Cancelled) and Error as thread-safe polling fields
 6. THE caller SHALL manage FileIndex lifecycle (create, poll, dispose) and update Status_Display
 
 ### Requirement 5: File Index — Status Display
@@ -92,10 +92,9 @@ Full spec in `requirements-viewer-ui-shell.md`. Summary:
 #### Acceptance Criteria
 
 1. WHILE scanning, THE Status_Display SHALL show a scanning indicator
-2. WHEN QuickScanComplete, THE Status_Display SHALL show line count + max Byte_Length
-3. WHEN FullScanComplete, THE Status_Display SHALL additionally show max Char_Length
-4. IF scan fails or is cancelled, THE Status_Display SHALL revert to pre-scan state
-5. IF scan fails, THE main content area SHALL display the error message
+2. WHEN ScanComplete, THE Status_Display SHALL show line count, max Byte_Length, AND max Char_Length (all available simultaneously)
+3. IF scan fails or is cancelled, THE Status_Display SHALL revert to pre-scan state
+4. IF scan fails, THE main content area SHALL display the error message
 
 ### Requirement 6: File View Service — Rectangular View Extraction
 
@@ -120,7 +119,7 @@ Full spec in `requirements-text-handling.md`. Summary:
 
 1. THE Text_View_Area SHALL measure viewport dimensions (Row_Count, Col_Count) from pixel size and monospace Char_Metrics, recomputing on resize with 150ms debounce
 2. THE backend SHALL create a View_Session_ID (UUID) per opened file, wait 500ms, and return Initial_View rows in the open-file response for immediate rendering
-3. THE backend SHALL push a "scan-complete" notification at FullScanComplete; the frontend SHALL send a refresh "get-view" request to obtain fully-indexed content
+3. THE backend SHALL push a "scan-complete" notification at ScanComplete; the frontend SHALL send a refresh "get-view" request to obtain fully-indexed content
 4. THE "get-view" handler SHALL parse the 5-field payload, invoke FileViewService.GetViewAsync, and return newline-delimited rows (or ERROR: prefix on failure)
 5. THE frontend SHALL manage per-tab view state (TabViewState), cache rows, and orchestrate requests via a state machine gating on (active tab + scan-complete + measurement)
 6. THE frontend SHALL display vertical/horizontal scrollbars with progressive max values polled at 100ms intervals during active scans via "get-scroll-info" messages

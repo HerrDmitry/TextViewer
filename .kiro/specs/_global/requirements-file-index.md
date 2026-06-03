@@ -4,139 +4,148 @@
 
 ## Introduction
 
-File Index feature. When a user selects a file via the Open File Dialog, the application scans the file in two phases to build a compact, thread-safe index of line metadata. The index tracks both byte-lengths and visible-character-lengths per line. Results are displayed progressively in the UI as each scan phase completes.
+File Index feature. When a user selects a file via the Open File Dialog, the application scans the file in a single unified pass to build a compact, thread-safe index of line metadata. The scan detects encoding (BOM), identifies line endings, records byte lengths, AND computes character lengths simultaneously. Results are available immediately upon scan completion.
 
 ## Glossary
 
 - **FileIndex**: The C# class responsible for owning the index data structure and orchestrating scanning of a single file
 - **Line_Index**: The internal data structure within FileIndex that stores per-line length metadata (byte length and character length)
-- **Quick_Scan**: The first scan phase that identifies line endings and records byte lengths per line (including delimiter bytes)
-- **Full_Scan**: The second scan phase that computes visible character lengths per line using the file's encoding
+- **Unified_Scan**: The single scan pass that identifies line endings, records byte lengths, AND computes character lengths in one sequential file read
+- **LinePair**: Value type `(ulong ByteLength, ulong CharLength)` representing both lengths for a single line
 - **Byte_Length**: The length of a line measured in bytes, including the line-ending delimiter bytes (LF=1, CR=1, CRLF=2); the final line stores only content bytes if not terminated by a delimiter
-- **Char_Length**: The length of a line measured in visible characters (decoded according to file encoding)
+- **Char_Length**: The length of a line measured in visible characters (decoded according to file encoding), excluding line ending characters and BOM
 - **Status_Display**: The UI region beside the file name showing scan result metrics (line count, max byte length, max char length)
 
 ## Requirements
 
-### Requirement 1: File Opening Mode
+### Requirement 1: Single-Pass Scanning
 
-**User Story:** As a user, I want the application to open files non-exclusively, so that other processes can continue reading or writing the file while it is being scanned.
-
-#### Acceptance Criteria
-
-1. WHEN the FileIndex opens a file for scanning, THE FileIndex SHALL open the file with FileShare.ReadWrite access mode
-2. WHEN the FileIndex opens a file for scanning, THE FileIndex SHALL request only read access (FileAccess.Read) to the file
-3. IF the file cannot be opened due to an access error (IOException or UnauthorizedAccessException), THEN THE FileIndex SHALL always skip scanning, log at LogError level a diagnostic message containing the file path and exception type via the injected ILogger, AND populate the Error property with a message in the format "Failed to open {filePath}: {ExceptionType}"; LogError-level diagnostics SHALL only be published for access errors — non-access scan issues (corrupted files, unsupported formats) SHALL be logged at LogInformation level only
-4. IF the file does not exist at the specified path, THEN THE FileIndex SHALL skip scanning, log at LogError level a diagnostic message containing the file path via the injected ILogger, AND populate the Error property with a message in the format "Failed to open {filePath}: FileNotFoundException"
-
-### Requirement 2: Quick Scan — Line Ending Detection
-
-**User Story:** As a user, I want the application to quickly identify all line boundaries in the file, so that line count and byte-based line lengths are available as soon as possible.
+**User Story:** As a user, I want the file to be read only once during scanning, so that scan time is halved for large files and I see complete metrics sooner.
 
 #### Acceptance Criteria
 
-1. WHEN a file is selected in the Open_File_Dialog, THE FileIndex SHALL perform the Quick_Scan as the first scanning phase
-2. WHEN performing the Quick_Scan, THE FileIndex SHALL identify line endings by scanning raw bytes for LF (0x0A), CR (0x0D), and CRLF (0x0D 0x0A) delimiters, treating each as a single line boundary
-3. WHEN the Quick_Scan completes, THE Line_Index SHALL contain the Byte_Length for every line in the file, where Byte_Length is the number of bytes in the line including the line-ending delimiter bytes (LF=1 byte, CR=1 byte, CRLF=2 bytes); the final line, if not terminated by a delimiter, stores only its content bytes
-4. WHEN the Quick_Scan completes, THE Line_Index SHALL contain the total number of lines in the file, where a final segment of bytes not terminated by a line-ending delimiter counts as a line, and an empty file (zero bytes) yields a line count of zero
-5. IF a file read error occurs during the Quick_Scan, or if the scan is aborted for any other reason (including user cancellation or memory limits), THEN THE FileIndex SHALL abort the scan, prevent any population of the Line_Index, and report the failure without producing a partial Line_Index
+1. WHEN a file is selected for scanning, THE FileIndex SHALL perform exactly one sequential read of the file (Unified_Scan) that detects encoding via BOM as its first operation, then computes both Byte_Length and Char_Length for every line in a single pass
+2. WHEN the Unified_Scan completes successfully, THE Line_Index SHALL contain both Byte_Length and Char_Length for every line in the file, AND THE FileIndex SHALL transition ScanState directly from ScanInProgress to ScanComplete
+3. THE FileIndex SHALL NOT perform a second file read pass under any circumstances; all per-line metadata SHALL be derived from the single sequential read
+4. IF a file read error occurs during the Unified_Scan, or if the scan is aborted for any other reason (including user cancellation or memory limits), THEN THE FileIndex SHALL abort the scan, discard any partial line metadata, prevent any population of the Line_Index, transition ScanState to Failed or Cancelled as appropriate, and report the failure without producing a partial Line_Index
 
-### Requirement 3: Full Scan — Character Length Computation
+### Requirement 2: Line Ending Detection
 
-**User Story:** As a user, I want the application to compute the visible character length of each line, so that I can see accurate character-based metrics for the file.
-
-#### Acceptance Criteria
-
-1. WHEN the Quick_Scan completes successfully, THE FileIndex SHALL perform the Full_Scan as the second scanning phase without requiring additional user action
-2. WHEN performing the Full_Scan, THE FileIndex SHALL decode line content using the file's detected encoding and compute Char_Length per line, where Char_Length is the count of .NET characters (UTF-16 code units) in the decoded line content excluding line ending characters and excluding any BOM character
-3. WHEN the Full_Scan completes, THE Line_Index SHALL contain the Char_Length for every line in the file; IF the Line_Index cannot be populated due to a storage error or memory issue, THEN THE Full_Scan SHALL be treated as failed (ScanState transitions to Failed); retry is caller-triggered by disposing the current FileIndex and creating a new instance
-4. IF the Full_Scan encounters bytes that are invalid for the detected encoding during a Full_Scan operation, THEN THE FileIndex SHALL decode those bytes using the encoding's replacement character (U+FFFD) and count each replacement as one character toward Char_Length; replacement characters SHALL only be applied during Full_Scan operations
-
-### Requirement 4: Thread-Safe Index Structure
-
-**User Story:** As a developer, I want the Line_Index to be safe for concurrent reads, so that multiple consumers can query the index without synchronization issues.
+**User Story:** As a user, I want line boundary detection to remain correct, so that line counts and byte lengths are accurate.
 
 #### Acceptance Criteria
 
-1. WHEN concurrent read access occurs, THE Line_Index SHALL support at least 4 simultaneous reader threads while a single writer thread is appending data, such that every read returns a complete, previously-written value and never a torn or partially-updated value; this guarantee is conditional on actual concurrent access occurring. IF any intermediate or partially-updated state becomes visible to a reader thread, THE requirement SHALL be considered violated regardless of thread capacity.
-2. WHILE the Quick_Scan or Full_Scan is appending entries to the Line_Index, THE Line_Index SHALL guarantee that a line entry is not visible to readers until both its index position and its length value for the current scan phase have been fully written
-3. WHILE the Full_Scan is writing Char_Length to an existing line entry, THE Line_Index SHALL ensure readers observe either the entry without Char_Length (as left by Quick_Scan) or the entry with the fully written Char_Length, never an intermediate state
-4. THE Line_Index SHALL store each line's Byte_Length and Char_Length as a pair within the same segment, using a single integer tier determined by the larger of the two values (Byte_Length, since it includes delimiter bytes and Char_Length is always less than or equal to Byte_Length); both values in a pair use the same tier width
-5. THE Line_Index SHALL permit only a single writer thread to modify the index at any given time; concurrent writes from multiple threads are not supported
+1. WHEN the FileIndex opens a file for scanning, THE FileIndex SHALL perform the Unified_Scan as a single sequential pass that identifies line endings and records Byte_Length per line by scanning raw bytes for LF (0x0A), CR (0x0D), and CRLF (0x0D 0x0A) delimiters, treating each as a single line boundary
+2. WHEN the Unified_Scan completes, THE Line_Index SHALL contain the Byte_Length for every line in the file, where Byte_Length is the number of bytes in the line including the line-ending delimiter bytes (LF=1 byte, CR=1 byte, CRLF=2 bytes); the final line, if not terminated by a delimiter, stores only its content bytes
+3. WHEN the Unified_Scan completes, THE Line_Index SHALL contain the total number of lines in the file, where a final segment of bytes not terminated by a line-ending delimiter counts as a line, and an empty file (zero bytes) yields a line count of zero
+4. IF a file read error occurs during the Unified_Scan, or if the scan is aborted for any reason, THEN THE FileIndex SHALL abort the scan, clean up any partial line metadata, prevent any population of the Line_Index, and transition ScanState to Failed or Cancelled without producing a partial Line_Index
 
-### Requirement 5: Memory-Compact Storage
+### Requirement 3: Character Length Computation (Integrated)
 
-**User Story:** As a user, I want the index to use minimal memory, so that very large files (millions of lines with potentially very long lines) can be indexed without excessive memory consumption.
-
-#### Acceptance Criteria
-
-1. THE Line_Index SHALL use a single SegmentDirectory with a segmented storage strategy where consecutive lines are grouped into variable-length segments; each segment stores pairs of (Byte_Length, Char_Length) per line using one of four unsigned integer tiers: byte (0–255), ushort (0–65,535), uint (0–4,294,967,295), or ulong (>4,294,967,295); the tier for a segment is determined by the maximum Byte_Length in that segment (since Char_Length ≤ Byte_Length, both values fit in the same tier)
-2. THE Line_Index SHALL minimize total memory consumption (data bytes + per-segment metadata overhead) when deciding segment boundaries, such that a segment is only split into narrower-tier segments when the memory saved by using a narrower type exceeds the additional per-segment metadata cost; THE system SHALL be prohibited from splitting a segment when the memory saved does not exceed the metadata cost
-3. THE Line_Index SHALL support both widening (transitioning to a wider tier) and narrowing (transitioning to a narrower tier) at segment boundaries based on the Byte_Length values of subsequent lines
-4. THE Line_Index SHALL maintain the SegmentDirectory that maps line indices to their containing segment for O(log N) or better lookup
-5. WHEN the file contains zero lines, THE Line_Index SHALL store no segments and consume no per-line memory; metadata overhead is permitted even when no segments exist, and segment metadata is permitted for any non-empty file including single-line files
-
-### Requirement 6: Resource Disposal
-
-**User Story:** As a developer, I want FileIndex to cleanly release resources when disposed, so that the caller can manage FileIndex lifetime without leaks.
+**User Story:** As a user, I want character lengths computed during the same read pass, so that all metrics are available immediately when the scan finishes.
 
 #### Acceptance Criteria
 
-1. THE FileIndex SHALL accept a CancellationToken and an ILogger<FileIndex> (Microsoft.Extensions.Logging) at construction; when the token is signalled, THE FileIndex SHALL stop scanning within 500 milliseconds, where "stop scanning" means: no new file I/O operations are issued AND ScanState has transitioned to Cancelled within 500ms; resource cleanup (buffer deallocation, handle closure) may continue beyond the 500ms boundary
-2. THE FileIndex SHALL implement IDisposable and release all resources (file handles, buffers, index memory) when disposed
-3. IF the FileIndex fails to release a resource during disposal, THEN THE FileIndex SHALL log the failure via the injected ILogger and continue disposing remaining resources without throwing an exception
-4. THE FileIndex SHALL have no dependency on or awareness of callers, consumers, or the UI layer; it SHALL expose thread-safe readable fields and accept a CancellationToken and ILogger<FileIndex> at construction — nothing else
-5. WHEN the CancellationToken is signalled, partial cleanup is permitted where resources that can be released within 500ms are released immediately, and remaining resources SHALL be guaranteed to eventually be released after the timeout; cleanup SHALL NOT be abandoned under any circumstances
-6. THE FileIndex SHALL use the injected ILogger<FileIndex> for all diagnostic output: scan start and phase transitions at LogInformation level, access errors at LogError level, disposal events at LogDebug level
+1. WHEN performing the Unified_Scan, THE FileIndex SHALL decode line content using the file's detected encoding and compute Char_Length per line inline with line-ending detection, where Char_Length is the count of .NET characters (UTF-16 code units) in the decoded line content excluding line ending characters; BOM characters SHALL be excluded from Char_Length on the first line only
+2. IF the Unified_Scan encounters a byte sequence that is invalid for the detected encoding, THEN THE FileIndex SHALL decode that sequence using the .NET Decoder's replacement fallback (U+FFFD) and count each replacement character as one UTF-16 code unit toward Char_Length
+3. WHEN the Unified_Scan completes, THE Line_Index SHALL contain Char_Length for every line; partial results (Byte_Length without Char_Length) SHALL NOT be exposed to readers at any point
 
-### Requirement 7: Scan State and Error Exposure
+### Requirement 4: Encoding Detection
 
-**User Story:** As a developer, I want FileIndex to expose its scan progress and any error via thread-safe fields, so that any consumer can read current state without coordination.
+**User Story:** As a developer, I want encoding detection to remain BOM-based and happen before line scanning begins, so that the decoder is ready for the first byte of content.
 
 #### Acceptance Criteria
 
-1. THE FileIndex SHALL expose a ScanState property (public getter, no public setter) indicating the current phase: NotStarted, QuickScanInProgress, QuickScanComplete, FullScanInProgress, FullScanComplete, Failed, or Cancelled
-2. WHEN the Quick_Scan completes successfully, THE FileIndex SHALL transition ScanState to QuickScanComplete
-3. WHEN the Full_Scan completes successfully, THE FileIndex SHALL transition ScanState to FullScanComplete
-4. IF a scan fails, THEN THE FileIndex SHALL transition ScanState to Failed and expose an Error property containing the failure reason in the format "Failed to open {filePath}: {ExceptionType}" or "Scan failed for {filePath}: {ExceptionType}"
-5. IF the CancellationToken is signalled, THEN THE FileIndex SHALL transition ScanState to Cancelled
-6. THE ScanState and Error properties SHALL be safe to read from any thread at any time without synchronization by the caller
-7. THE Line_Index data SHALL be readable by any thread once ScanState reaches QuickScanComplete or later
+1. WHEN the Unified_Scan begins, THE FileIndex SHALL detect encoding by reading up to 4 bytes from the file start and matching BOM signatures in order: UTF-32 LE (FF FE 00 00), UTF-32 BE (00 00 FE FF), UTF-8 (EF BB BF), UTF-16 LE (FF FE), UTF-16 BE (FE FF); IF no BOM matches, default to UTF-8 with BomByteLength of 0
+2. THE FileIndex SHALL expose `Encoding` (type `System.Text.Encoding`) and `BomByteLength` (type `int`, values: 0, 2, 3, or 4) properties set during BOM detection before any line data is published
+3. IF the file contains fewer than 4 bytes, THE FileIndex SHALL match BOM signatures using only available bytes and default to UTF-8 when no match
 
-### Requirement 8: Encoding Exposure
+### Requirement 5: ScanState
 
-**User Story:** As a consumer (e.g. File_View_Service), I need to obtain the detected file encoding from FileIndex, so that line bytes can be correctly decoded into characters.
+**User Story:** As a developer, I want a simple scan state machine reflecting the single-pass reality, so that callers observe only meaningful states.
 
 #### Acceptance Criteria
 
-1. THE FileIndex SHALL expose a public property `Encoding` of type `System.Text.Encoding` returning the encoding detected during scan (UTF-8, UTF-16 LE, UTF-16 BE, UTF-32 LE, UTF-32 BE; defaults to UTF-8 when no BOM present)
-2. THE FileIndex SHALL expose a public property `BomByteLength` of type `int` returning the number of BOM bytes at file start (0 if no BOM, 3 for UTF-8, 2 for UTF-16, 4 for UTF-32)
-3. THE `Encoding` and `BomByteLength` properties SHALL be available immediately after scan starts (encoding detection is first operation before line indexing); they SHALL never be null once scan has started
+1. THE FileIndex SHALL expose a ScanState property with values: NotStarted, ScanInProgress, ScanComplete, Failed, or Cancelled
+2. WHEN StartScanAsync is invoked, THE FileIndex SHALL transition ScanState from NotStarted to ScanInProgress before performing any file I/O
+3. WHEN the Unified_Scan completes and both Byte_Length and Char_Length are populated for every line, THE FileIndex SHALL transition ScanState to ScanComplete
+4. IF a scan fails, THEN THE FileIndex SHALL transition ScanState to Failed and expose an Error property in format "Failed to open {filePath}: {ExceptionType}" or "Scan failed for {filePath}: {ExceptionType}"
+5. IF the CancellationToken is signalled, THEN THE FileIndex SHALL transition ScanState to Cancelled within 500 milliseconds
+6. THE ScanState and Error properties SHALL be safe to read from any thread at any time without synchronization
+7. THE ScanState SHALL only transition forward: NotStarted → ScanInProgress → ScanComplete (or to Failed/Cancelled from any active state); backward transitions SHALL never occur; Cancelled and Failed are terminal
+8. WHEN ScanState reaches ScanComplete, THE Line_Index data SHALL be readable by any thread without additional synchronization
 
-### Requirement 9: Caller Responsibilities (UI Integration)
+### Requirement 6: Abort Behavior
 
-**User Story:** As a user, I want to see scan results as they become available and error messages when scans fail, so that I get immediate feedback about the file.
-
-#### Acceptance Criteria
-
-1. THE caller SHALL be responsible for creating, polling, and disposing the FileIndex instance
-2. THE caller SHALL periodically read the FileIndex ScanState and update the Status_Display accordingly
-3. WHEN the caller observes ScanState = QuickScanComplete, THE Status_Display SHALL show the total number of lines and the longest Byte_Length beside the file name
-4. WHEN the caller observes ScanState = FullScanComplete, THE Status_Display SHALL show the longest Char_Length in addition to the line count and longest Byte_Length already displayed, retaining all previously shown metrics
-5. WHILE the caller observes ScanState = QuickScanInProgress or FullScanInProgress, THE Status_Display SHALL display a visible scanning indicator element beside the file name; the indicator may be hidden if the UI component is unmounted or hidden for other UI-state reasons
-6. IF the caller observes ScanState = Failed or Cancelled, THEN THE Status_Display SHALL not display metrics from the failed or cancelled scan and SHALL revert to the state prior to the failed scan; reversion SHALL occur only when the caller actively observes the failed or cancelled state
-7. WHEN a new file is selected, THE caller SHALL signal cancellation on the previous FileIndex's CancellationToken, dispose it, then create a new FileIndex instance
-8. WHEN a new file is selected for scanning, THE caller SHALL clear all metrics from the previous file before displaying the scanning indicator for the new file
-9. IF the caller observes ScanState = Failed, THEN THE caller SHALL display the FileIndex Error field in the main content area, replacing the default "hello world" text
-
-### Requirement 10: Byte Offset Query Correctness and Performance
-
-**User Story:** As a user, I want line-to-byte navigation to stay accurate and responsive even on very large files, so that scrolling and viewport updates remain smooth.
+**User Story:** As a developer, I want abort semantics preserved — a failed or cancelled scan produces no partial Line_Index.
 
 #### Acceptance Criteria
 
-1. WHEN `GetByteOffset(lineIndex)` is called for any valid line index, THEN THE Line_Index SHALL return exactly the cumulative sum of `Byte_Length` values for lines `[0..lineIndex-1]`
-2. WHEN `GetByteOffset(0)` and `GetByteOffset(LineCount)` are called, THEN THE Line_Index SHALL return `0` and total file size in bytes respectively
-3. WHEN `GetByteOffset(lineIndex)` is called for large line indices near end-of-file, THEN THE Line_Index SHALL compute the result using segment-indexed prefix metadata and SHALL NOT perform full per-line accumulation from line `0`
-4. WHEN `GetByteOffset` is called repeatedly for nearby line indices, THEN THE Line_Index SHALL reuse segment-locality information to avoid repeating global prefix recomputation
-5. WHEN byte offsets are optimized, THEN existing `GetByteLength`, `GetCharLength`, scan publication ordering, and `Clear()` reset behavior SHALL remain unchanged
+1. IF a file read error, user cancellation, or memory limit occurs during the Unified_Scan, THEN THE FileIndex SHALL clear any partially-written Line_Index entries so that Line_Index contains zero lines, transition ScanState to Failed or Cancelled, and populate the Error property
+2. WHEN the CancellationToken is signalled, THE FileIndex SHALL stop scanning within 500 milliseconds
+3. IF the FileIndex transitions to Failed or Cancelled, THEN every line entry visible in the Line_Index SHALL be fully written (no torn values observable by readers)
+
+### Requirement 7: Thread-Safe Index Structure
+
+**User Story:** As a developer, I want the Line_Index to remain safe for concurrent reads during and after the unified scan.
+
+#### Acceptance Criteria
+
+1. THE Line_Index SHALL support at least 4 simultaneous reader threads while a single writer thread is appending data, with every read returning a complete value (never torn)
+2. THE Line_Index SHALL guarantee a line entry is not visible to readers until both its Byte_Length and Char_Length have been fully written; line count incremented only after all segment data committed
+3. THE Line_Index SHALL store each line's Byte_Length and Char_Length as a pair within the same segment, using a single integer tier determined by Byte_Length (since Char_Length ≤ Byte_Length)
+4. THE Line_Index SHALL permit only a single writer thread at any given time
+
+### Requirement 8: Memory-Compact Storage
+
+**User Story:** As a user, I want the index to use minimal memory with tiered segments, so that very large files remain indexable.
+
+#### Acceptance Criteria
+
+1. THE Line_Index SHALL use a single SegmentDirectory with segmented storage; each segment stores pairs of (Byte_Length, Char_Length) per line using one of four unsigned integer tiers: byte (0–255), ushort (0–65,535), uint (0–4,294,967,295), or ulong (>4,294,967,295)
+2. THE Line_Index SHALL minimize total memory by splitting segments only when savings exceed per-segment metadata cost (9 bytes)
+3. THE Line_Index SHALL support both widening and narrowing at segment boundaries based on Byte_Length values
+
+### Requirement 9: File Opening Mode
+
+**User Story:** As a user, I want the application to open files non-exclusively.
+
+#### Acceptance Criteria
+
+1. WHEN the FileIndex opens a file for scanning, THE FileIndex SHALL open in read-only mode (FileAccess.Read) with shared read-write access (FileShare.ReadWrite) without creating or truncating (FileMode.Open)
+2. IF the file cannot be opened (IOException or UnauthorizedAccessException), THEN THE FileIndex SHALL skip scanning, transition to Failed, log at LogError level, AND populate Error
+3. IF the file does not exist, THEN THE FileIndex SHALL skip scanning, transition to Failed, log at LogError level, AND populate Error
+
+### Requirement 10: Backward Compatibility — Public API Surface
+
+**User Story:** As a developer, I want existing consumers to continue working with minimal changes.
+
+#### Acceptance Criteria
+
+1. THE FileIndex SHALL expose `Index` (LineIndex), `Encoding`, `BomByteLength`, `State`, and `Error` with same types and thread-safety
+2. THE LineIndex SHALL expose `LineCount` (int), `MaxByteLength` (ulong), `MaxCharLength` (ulong), `GetByteLength(int)` (ulong), `GetCharLength(int)` (ulong), and `GetByteOffset(int)` (ulong)
+3. THE `GetCharLength(int)` SHALL return non-nullable `ulong` (both lengths always available simultaneously after unified scan)
+4. THE FileIndex SHALL implement IDisposable following standard patterns
+5. THE FileIndex `StartScanAsync()` SHALL return `Task<Result<ScanSummary, ScanError>>`
+
+### Requirement 11: Byte Offset Query Correctness and Performance
+
+**User Story:** As a user, I want line-to-byte navigation to stay accurate and responsive.
+
+#### Acceptance Criteria
+
+1. `GetByteOffset(lineIndex)` SHALL return exactly the cumulative sum of Byte_Length values for lines [0..lineIndex-1]
+2. `GetByteOffset(0)` == 0 and `GetByteOffset(LineCount)` == total file size
+3. `GetByteOffset` for large indices SHALL use segment-indexed prefix metadata, not full per-line accumulation from line 0
+4. Nearby offset queries SHALL reuse segment-locality information
+
+### Requirement 12: Resource Disposal
+
+**User Story:** As a developer, I want FileIndex to cleanly release resources when disposed.
+
+#### Acceptance Criteria
+
+1. THE FileIndex SHALL accept a CancellationToken and an ILogger<FileIndex> at construction
+2. WHEN Dispose is called, THE FileIndex SHALL release file stream and clear LineIndex memory, continuing to release remaining resources after failures
+3. IF disposal fails for a resource, THE FileIndex SHALL log at Warning level and continue
+4. Double Dispose SHALL complete without throwing
