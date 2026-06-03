@@ -640,23 +640,23 @@ describe('Feature: text-handling, Property 4: Response encoding correctness', ()
  * Validates: Requirements 10.1, 10.2, 10.3, 10.4, 10.5
  *
  * Property: For any maxByteLength, maxCharLength, and scan state, computeHorizontalMax SHALL:
- * - Return maxByteLength when scan state is QuickScanInProgress or QuickScanComplete
- * - Return maxCharLength when scan state is FullScanInProgress or FullScanComplete
+ * - Return maxByteLength when scan state is ScanInProgress
+ * - Return maxCharLength when scan state is ScanComplete
  * - Return 0 when scan state is NotStarted, Failed, or Cancelled
  */
 
 describe('Feature: text-handling, Property 10: Horizontal scrollbar source depends on scan state', () => {
-  const quickScanStates: ScanStateValue[] = ['QuickScanInProgress', 'QuickScanComplete'];
-  const fullScanStates: ScanStateValue[] = ['FullScanInProgress', 'FullScanComplete'];
+  const inProgressStates: ScanStateValue[] = ['ScanInProgress'];
+  const completeStates: ScanStateValue[] = ['ScanComplete'];
   const zeroStates: ScanStateValue[] = ['NotStarted', 'Failed', 'Cancelled'];
 
   const maxByteLengthArb = fc.integer({ min: 0, max: 100000 });
   const maxCharLengthArb = fc.integer({ min: 0, max: 100000 });
 
-  it('QuickScanInProgress/QuickScanComplete → horizontalMax = maxByteLength', () => {
+  it('ScanInProgress → horizontalMax = maxByteLength', () => {
     fc.assert(
       fc.property(
-        fc.constantFrom(...quickScanStates),
+        fc.constantFrom(...inProgressStates),
         maxByteLengthArb,
         maxCharLengthArb,
         (scanState: ScanStateValue, maxByteLength: number, maxCharLength: number) => {
@@ -668,10 +668,10 @@ describe('Feature: text-handling, Property 10: Horizontal scrollbar source depen
     );
   });
 
-  it('FullScanInProgress/FullScanComplete → horizontalMax = maxCharLength', () => {
+  it('ScanComplete → horizontalMax = maxCharLength', () => {
     fc.assert(
       fc.property(
-        fc.constantFrom(...fullScanStates),
+        fc.constantFrom(...completeStates),
         maxByteLengthArb,
         maxCharLengthArb,
         (scanState: ScanStateValue, maxByteLength: number, maxCharLength: number) => {
@@ -805,10 +805,8 @@ describe('Feature: text-handling, Property 9: Vertical scrollbar max equals line
 
   const scanStateArb: fc.Arbitrary<ScanStateValue> = fc.constantFrom(
     'NotStarted' as ScanStateValue,
-    'QuickScanInProgress' as ScanStateValue,
-    'QuickScanComplete' as ScanStateValue,
-    'FullScanInProgress' as ScanStateValue,
-    'FullScanComplete' as ScanStateValue,
+    'ScanInProgress' as ScanStateValue,
+    'ScanComplete' as ScanStateValue,
     'Failed' as ScanStateValue,
     'Cancelled' as ScanStateValue,
   );
@@ -978,8 +976,8 @@ describe('Feature: text-handling, Property 5: Payload parse error identification
  * Property: For any sequence of events (openFile, tabSwitch, scrollInfoResponse(terminal),
  * scrollInfoResponse(inProgress), closeTab), polling SHALL be active iff the active tab
  * has an in-progress scan state. Specifically:
- * - Polling starts when a file is opened (scan starts in QuickScanInProgress)
- * - Polling stops when a terminal scan state is received (QuickScanComplete, FullScanComplete, Failed, Cancelled)
+ * - Polling starts when a file is opened (scan starts in ScanInProgress)
+ * - Polling stops when a terminal scan state is received (ScanComplete, Failed, Cancelled)
  * - Polling stops when the polled tab is closed
  * - Polling restarts when switching to a tab whose scan is still in progress
  */
@@ -1050,8 +1048,8 @@ describe('Feature: text-handling, Property 11: Polling lifecycle invariant', () 
   type PollingEvent =
     | { kind: 'openFile'; sessionIndex: number }
     | { kind: 'tabSwitch'; tabIndex: number }
-    | { kind: 'scrollInfoTerminal'; scanState: 'QuickScanComplete' | 'FullScanComplete' | 'Failed' | 'Cancelled' }
-    | { kind: 'scrollInfoInProgress'; scanState: 'QuickScanInProgress' | 'FullScanInProgress' }
+    | { kind: 'scrollInfoTerminal'; scanState: 'ScanComplete' | 'Failed' | 'Cancelled' }
+    | { kind: 'scrollInfoInProgress'; scanState: 'ScanInProgress' }
     | { kind: 'closeTab'; tabIndex: number };
 
   // --- Model state ---
@@ -1071,11 +1069,11 @@ describe('Feature: text-handling, Property 11: Polling lifecycle invariant', () 
 
   // --- Generators ---
 
-  const terminalScanStates: Array<'QuickScanComplete' | 'FullScanComplete' | 'Failed' | 'Cancelled'> =
-    ['QuickScanComplete', 'FullScanComplete', 'Failed', 'Cancelled'];
+  const terminalScanStates: Array<'ScanComplete' | 'Failed' | 'Cancelled'> =
+    ['ScanComplete', 'Failed', 'Cancelled'];
 
-  const inProgressScanStates: Array<'QuickScanInProgress' | 'FullScanInProgress'> =
-    ['QuickScanInProgress', 'FullScanInProgress'];
+  const inProgressScanStates: Array<'ScanInProgress'> =
+    ['ScanInProgress'];
 
   const pollingEventArb: fc.Arbitrary<PollingEvent> = fc.oneof(
     fc.integer({ min: 0, max: 99 }).map((sessionIndex): PollingEvent => ({

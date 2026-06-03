@@ -19,8 +19,8 @@ export function clamp(value: number, min: number, max: number): number {
 
 /**
  * Compute horizontal scrollbar max based on scan state.
- * QuickScanInProgress / QuickScanComplete → maxByteLength
- * FullScanInProgress / FullScanComplete → maxCharLength
+ * ScanInProgress → maxByteLength (char lengths may not be final yet)
+ * ScanComplete → maxCharLength
  * Default (NotStarted, Failed, Cancelled) → 0
  */
 export function computeHorizontalMax(
@@ -29,11 +29,9 @@ export function computeHorizontalMax(
   maxCharLength: number
 ): number {
   switch (scanState) {
-    case 'QuickScanInProgress':
-    case 'QuickScanComplete':
+    case 'ScanInProgress':
       return maxByteLength;
-    case 'FullScanInProgress':
-    case 'FullScanComplete':
+    case 'ScanComplete':
       return maxCharLength;
     default:
       return 0;
@@ -254,7 +252,7 @@ export class ShellStateService implements OnDestroy {
       });
       this.tabViewStates.set(updatedStates);
 
-      // Start scrollbar polling — scan starts in QuickScanInProgress
+      // Start scrollbar polling — scan starts in ScanInProgress
       this.startScrollPolling(viewSessionId);
     });
 
@@ -712,7 +710,7 @@ export class ShellStateService implements OnDestroy {
     this.updateTabScrollbar(sessionId, { verticalMax, horizontalMax, disabled });
 
     // Stop polling if scan reached terminal state
-    if (scanState === 'QuickScanComplete' || scanState === 'FullScanComplete'
+    if (scanState === 'ScanComplete'
         || scanState === 'Failed' || scanState === 'Cancelled') {
       this.stopScrollPolling();
 

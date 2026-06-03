@@ -67,8 +67,7 @@ public sealed class FileViewService : IDisposable
 
         // Snapshot line count (volatile read) and scan state
         var scannedLines = _fileIndex.Index.LineCount;
-        var scanComplete = _fileIndex.State >= ScanState.QuickScanComplete
-                           && _fileIndex.State < ScanState.Failed;
+        var scanComplete = _fileIndex.State == ScanState.ScanComplete;
 
         // Edge case: empty file after scan complete
         if (scanComplete && scannedLines == 0)
@@ -213,8 +212,7 @@ public sealed class FileViewService : IDisposable
 
         // Snapshot line count (volatile read) and scan state
         var scannedLines = _fileIndex.Index.LineCount;
-        var scanComplete = _fileIndex.State >= ScanState.QuickScanComplete
-                           && _fileIndex.State < ScanState.Failed;
+        var scanComplete = _fileIndex.State == ScanState.ScanComplete;
 
         // Start line beyond file
         if (startLine >= scannedLines)

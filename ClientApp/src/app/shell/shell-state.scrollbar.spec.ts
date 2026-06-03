@@ -140,20 +140,12 @@ describe('ShellStateService scrollbar behavior', () => {
   // --- computeHorizontalMax pure function tests ---
 
   describe('computeHorizontalMax', () => {
-    it('returns maxByteLength for QuickScanInProgress', () => {
-      expect(computeHorizontalMax('QuickScanInProgress', 500, 300)).toBe(500);
+    it('returns maxByteLength for ScanInProgress', () => {
+      expect(computeHorizontalMax('ScanInProgress', 500, 300)).toBe(500);
     });
 
-    it('returns maxByteLength for QuickScanComplete', () => {
-      expect(computeHorizontalMax('QuickScanComplete', 750, 400)).toBe(750);
-    });
-
-    it('returns maxCharLength for FullScanInProgress', () => {
-      expect(computeHorizontalMax('FullScanInProgress', 500, 300)).toBe(300);
-    });
-
-    it('returns maxCharLength for FullScanComplete', () => {
-      expect(computeHorizontalMax('FullScanComplete', 500, 420)).toBe(420);
+    it('returns maxCharLength for ScanComplete', () => {
+      expect(computeHorizontalMax('ScanComplete', 500, 420)).toBe(420);
     });
 
     it('returns 0 for NotStarted', () => {
@@ -176,11 +168,11 @@ describe('ShellStateService scrollbar behavior', () => {
       const vsId = openTab('/file.txt');
 
       // Simulate a valid scroll-info response while polling is active
-      simulateScrollInfoResponse('QuickScanInProgress\n1000\n256\n0');
+      simulateScrollInfoResponse('ScanInProgress\n1000\n256\n0');
 
       const state = service.tabViewStates().get(vsId);
       expect(state!.scrollbarState.verticalMax).toBe(1000);
-      expect(state!.scrollbarState.horizontalMax).toBe(256); // QuickScan → maxByteLength
+      expect(state!.scrollbarState.horizontalMax).toBe(256); // ScanInProgress → maxByteLength
       expect(state!.scrollbarState.disabled).toBe(false);
     });
 
@@ -198,7 +190,7 @@ describe('ShellStateService scrollbar behavior', () => {
       const vsId = openTab('/file.txt');
       const stateBefore = service.tabViewStates().get(vsId)!.scrollbarState;
 
-      simulateScrollInfoResponse('QuickScanInProgress\n1000\n256');
+      simulateScrollInfoResponse('ScanInProgress\n1000\n256');
 
       const stateAfter = service.tabViewStates().get(vsId)!.scrollbarState;
       expect(stateAfter).toEqual(stateBefore);
@@ -208,7 +200,7 @@ describe('ShellStateService scrollbar behavior', () => {
       const vsId = openTab('/file.txt');
       const stateBefore = service.tabViewStates().get(vsId)!.scrollbarState;
 
-      simulateScrollInfoResponse('QuickScanInProgress\nabc\n256\n0');
+      simulateScrollInfoResponse('ScanInProgress\nabc\n256\n0');
 
       const stateAfter = service.tabViewStates().get(vsId)!.scrollbarState;
       expect(stateAfter).toEqual(stateBefore);
@@ -268,12 +260,12 @@ describe('ShellStateService scrollbar behavior', () => {
   // --- Polling stops on terminal states ---
 
   describe('polling stops on terminal scan states', () => {
-    it('stops polling on FullScanComplete response', () => {
+    it('stops polling on ScanComplete response', () => {
       openTab('/file.txt');
       mockSend.mockClear();
 
-      // Simulate FullScanComplete response
-      simulateScrollInfoResponse('FullScanComplete\n5000\n512\n400');
+      // Simulate ScanComplete response
+      simulateScrollInfoResponse('ScanComplete\n5000\n512\n400');
 
       // Advance time — no more polls should fire
       jest.advanceTimersByTime(500);
@@ -352,7 +344,7 @@ describe('ShellStateService scrollbar behavior', () => {
       const vsId = openTab('/file.txt');
 
       // Simulate a scroll-info response to set scrollbar values
-      simulateScrollInfoResponse('QuickScanInProgress\n2000\n128\n0');
+      simulateScrollInfoResponse('ScanInProgress\n2000\n128\n0');
 
       const scrollbar = service.activeScrollbarState();
       expect(scrollbar).not.toBeNull();
@@ -369,7 +361,7 @@ describe('ShellStateService scrollbar behavior', () => {
       const vsId = openTab('/file.txt');
 
       // Simulate response with zero values (empty file)
-      simulateScrollInfoResponse('QuickScanInProgress\n0\n0\n0');
+      simulateScrollInfoResponse('ScanInProgress\n0\n0\n0');
 
       const state = service.tabViewStates().get(vsId);
       expect(state!.scrollbarState.verticalMax).toBe(0);

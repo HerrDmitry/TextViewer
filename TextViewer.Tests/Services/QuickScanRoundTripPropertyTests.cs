@@ -109,12 +109,10 @@ public class QuickScanRoundTripPropertyTests
                     fileIndex.StartScanAsync().GetAwaiter().GetResult();
 
                     // Verify state
-                    if (fileIndex.State != ScanState.QuickScanComplete &&
-                        fileIndex.State != ScanState.FullScanInProgress &&
-                        fileIndex.State != ScanState.FullScanComplete)
+                    if (fileIndex.State != ScanState.ScanComplete)
                     {
                         return false.Label(
-                            $"Expected QuickScanComplete (or later), got {fileIndex.State}. Error: {fileIndex.Error}");
+                            $"Expected ScanComplete, got {fileIndex.State}. Error: {fileIndex.Error}");
                     }
 
                     var index = fileIndex.Index;

@@ -137,7 +137,7 @@ public class Program
 
             var state = service.ScanState;
 
-            if (state >= ScanState.FullScanComplete)
+            if (state >= ScanState.ScanComplete)
             {
                 messageBus.Send("scan-complete", viewSessionId);
                 break;
@@ -290,7 +290,7 @@ public class Program
 
         // O(1) cached max values from LineIndex
         ulong maxByteLength = lineIndex.MaxByteLength;
-        ulong maxCharLength = lineIndex.MaxCharLength ?? 0;
+        ulong maxCharLength = lineIndex.MaxCharLength;
 
         // Response: scanState\nlineCount\nmaxByteLength\nmaxCharLength
         return $"{scanState}\n{lineCount}\n{maxByteLength}\n{maxCharLength}";
@@ -348,8 +348,7 @@ public class Program
         long total = 0;
         Parallel.For(0, lineCount, () => 0L, (i, _, subtotal) =>
         {
-            var charLen = lineIndex.GetCharLength(i);
-            long len = (long)(charLen ?? lineIndex.GetByteLength(i));
+            long len = (long)lineIndex.GetCharLength(i);
             subtotal += len == 0 ? 1 : (len + colCount - 1) / colCount;
             return subtotal;
         },
@@ -393,8 +392,7 @@ public class Program
         long cumulative = 0;
         for (int i = 0; i < lineCount; i++)
         {
-            var charLen = lineIndex.GetCharLength(i);
-            long len = (long)(charLen ?? lineIndex.GetByteLength(i));
+            long len = (long)lineIndex.GetCharLength(i);
             long visualRows = len == 0 ? 1 : (len + colCount - 1) / colCount;
 
             if (cumulative + visualRows > visualRowIndex)
@@ -407,8 +405,7 @@ public class Program
         }
 
         // Clamp to last visual row
-        var lastCharLen = lineIndex.GetCharLength(lineCount - 1);
-        long lastLineLen = (long)(lastCharLen ?? lineIndex.GetByteLength(lineCount - 1));
+        long lastLineLen = (long)lineIndex.GetCharLength(lineCount - 1);
         long lastVisualRows = lastLineLen == 0 ? 1 : (lastLineLen + colCount - 1) / colCount;
         int lastOffset = (int)((lastVisualRows - 1) * colCount);
         return (lineCount - 1, lastOffset);

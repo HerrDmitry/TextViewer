@@ -36,7 +36,7 @@ sequenceDiagram
 2. **Server-side Parallel.For** — thread-local accumulators + Interlocked.Add; deterministic sum
 3. **Cache key = (sessionId, colCount, lineCount)** — lineCount changes as scan progresses; colCount on resize
 4. **Backend visual row resolution** — frontend sends visual row index in wrapped get-view request; backend iterates to find (startLine, characterOffset)
-5. **Char-length fallback** — when Full_Scan hasn't reached a line, byte length approximates char length
+5. **Char-length available from scan** — unified scan computes char length alongside byte length; no fallback needed
 6. **Complete removal of get-line-lengths** — handler, subscription, signals all removed
 
 ## Components and Interfaces

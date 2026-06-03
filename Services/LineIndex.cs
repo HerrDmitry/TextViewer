@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using System.Threading;
 
 namespace TextViewer.Services;
@@ -14,19 +13,18 @@ public sealed class LineIndex
     private SegmentDirectory _segments = new();
     private ulong[] _segmentPrefixBytes = [];
     private volatile int _lineCount;
-    private volatile int _charLengthsWrittenUpTo;
     private long _totalByteLength;
     private long _maxByteLength;
     private long _maxCharLength;
 
-    /// <summary>Total lines indexed (visible once Quick_Scan appends).</summary>
+    /// <summary>Total lines indexed (visible once scan appends).</summary>
     public int LineCount => _lineCount;
 
     /// <summary>Maximum byte length across all indexed lines. O(1).</summary>
     public ulong MaxByteLength => (ulong)Interlocked.Read(ref _maxByteLength);
 
-    /// <summary>Maximum char length across all lines with char data written, or null if none written yet. O(1).</summary>
-    public ulong? MaxCharLength => _charLengthsWrittenUpTo == 0 ? null : (ulong)Interlocked.Read(ref _maxCharLength);
+    /// <summary>Maximum char length across all indexed lines. O(1).</summary>
+    public ulong MaxCharLength => (ulong)Interlocked.Read(ref _maxCharLength);
 
     /// <summary>Returns byte length for a given line (0-based). O(log N) lookup.</summary>
     public ulong GetByteLength(int lineIndex)
@@ -40,18 +38,14 @@ public sealed class LineIndex
     }
 
     /// <summary>
-    /// Returns char length for a given line (0-based), or null if Full_Scan
-    /// has not yet reached this line. Uses volatile _charLengthsWrittenUpTo
-    /// counter: returns null when lineIndex >= _charLengthsWrittenUpTo,
-    /// otherwise reads from segment. O(log N) lookup.
+    /// Returns char length for a given line (0-based). O(log N) lookup.
+    /// Both byte and char lengths are written atomically per batch,
+    /// so any visible line always has both values available.
     /// </summary>
-    public ulong? GetCharLength(int lineIndex)
+    public ulong GetCharLength(int lineIndex)
     {
         if (lineIndex < 0 || lineIndex >= _lineCount)
             throw new ArgumentOutOfRangeException(nameof(lineIndex));
-
-        if (lineIndex >= _charLengthsWrittenUpTo)
-            return null;
 
         var segment = _segments.FindSegment(lineIndex);
         int offset = lineIndex - segment.StartLine;
@@ -89,13 +83,12 @@ public sealed class LineIndex
     // --- Writer methods (internal, called by FileIndex during scan) ---
 
     /// <summary>
-    /// Appends line pairs during Quick_Scan. Each pair is (byteLength, 0).
-    /// Char_Length slot initialized to 0, written later by Full_Scan.
+    /// Appends complete line pairs (byteLength, charLength) during unified scan.
     /// Thread-safety: holds _writeLock, writes segment data, then increments _lineCount.
     /// </summary>
-    internal void AppendByteLengths(ReadOnlySpan<ulong> byteLengths)
+    internal void AppendLinePairs(ReadOnlySpan<LinePair> pairs)
     {
-        if (byteLengths.IsEmpty)
+        if (pairs.IsEmpty)
             return;
 
         lock (_writeLock)
@@ -103,7 +96,7 @@ public sealed class LineIndex
             int startLine = _lineCount;
             int oldSegmentCount = _segments.Segments.Count;
             ulong baseOffsetBeforeAppend = (ulong)_totalByteLength;
-            _segments.Append(byteLengths, startLine);
+            _segments.Append(pairs, startLine);
 
             var segments = _segments.Segments;
             if (segments.Count > oldSegmentCount)
@@ -127,87 +120,32 @@ public sealed class LineIndex
                 _segmentPrefixBytes = updatedPrefixes;
             }
 
-            // Track running maximum byte length.
-            foreach (var byteLen in byteLengths)
+            // Track running maximums and total byte length.
+            foreach (var pair in pairs)
             {
-                if ((long)byteLen > _maxByteLength)
-                    _maxByteLength = (long)byteLen;
+                if ((long)pair.ByteLength > _maxByteLength)
+                    _maxByteLength = (long)pair.ByteLength;
 
-                _totalByteLength += (long)byteLen;
+                if ((long)pair.CharLength > _maxCharLength)
+                    _maxCharLength = (long)pair.CharLength;
+
+                _totalByteLength += (long)pair.ByteLength;
             }
 
             // Publish: increment _lineCount AFTER segment data is fully written.
             // volatile write ensures visibility ordering.
-            _lineCount = startLine + byteLengths.Length;
+            _lineCount = startLine + pairs.Length;
         }
     }
 
     /// <summary>
-    /// Writes the char length into the second slot of an existing pair.
-    /// Called by Full_Scan for each line after Quick_Scan has populated the pair.
-    /// Uses Interlocked operations for atomic writes, then increments _charLengthsWrittenUpTo.
-    /// </summary>
-    internal void SetCharLength(int lineIndex, ulong charLength)
-    {
-        var segment = _segments.FindSegment(lineIndex);
-        int offsetInSegment = lineIndex - segment.StartLine;
-        int tierSize = (int)segment.Tier;
-        int charByteOffset = (offsetInSegment * 2 + 1) * tierSize;
-
-        // Atomic write to the char-length slot using Interlocked operations.
-        // For Byte tier (1 byte), a single byte write is atomic on all platforms.
-        // For wider tiers, use Interlocked.Exchange via Unsafe.As.
-        byte[] data = segment.Data;
-        switch (tierSize)
-        {
-            case 1:
-                // Single byte write is inherently atomic
-                data[charByteOffset] = (byte)charLength;
-                break;
-            case 2:
-                ref short slot16 = ref Unsafe.As<byte, short>(
-                    ref data[charByteOffset]);
-                Interlocked.Exchange(ref slot16, (short)(ushort)charLength);
-                break;
-            case 4:
-                ref int slot32 = ref Unsafe.As<byte, int>(
-                    ref data[charByteOffset]);
-                Interlocked.Exchange(ref slot32, (int)(uint)charLength);
-                break;
-            case 8:
-                ref long slot64 = ref Unsafe.As<byte, long>(
-                    ref data[charByteOffset]);
-                Interlocked.Exchange(ref slot64, (long)charLength);
-                break;
-        }
-
-        // Track running maximum char length.
-        if ((long)charLength > _maxCharLength)
-            _maxCharLength = (long)charLength;
-
-        // Publish: increment _charLengthsWrittenUpTo AFTER the Interlocked write completes.
-        // volatile write ensures readers see the char-length value before seeing the counter update.
-        _charLengthsWrittenUpTo = lineIndex + 1;
-    }
-
-    /// <summary>
-    /// Marks all char lengths as written. Called after Full_Scan completes.
-    /// Sets _charLengthsWrittenUpTo = _lineCount so all lines report char lengths.
-    /// </summary>
-    internal void FinalizeCharLengths()
-    {
-        _charLengthsWrittenUpTo = _lineCount;
-    }
-
-    /// <summary>
-    /// Resets the index to empty state. Called on Quick_Scan abort or disposal.
+    /// Resets the index to empty state. Called on scan abort or disposal.
     /// </summary>
     internal void Clear()
     {
         lock (_writeLock)
         {
             _lineCount = 0;
-            _charLengthsWrittenUpTo = 0;
             _totalByteLength = 0;
             _maxByteLength = 0;
             _maxCharLength = 0;

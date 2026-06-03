@@ -44,16 +44,6 @@ internal sealed class Segment
         return ReadValue(charOffset, tierSize);
     }
 
-    /// <summary>
-    /// Sets the char length (second value in pair) at the given offset.
-    /// Used by Full_Scan to fill in char lengths after Quick_Scan created the pairs.
-    /// </summary>
-    public void SetCharLength(int offsetWithinSegment, ulong value)
-    {
-        int tierSize = (int)Tier;
-        int charOffset = (offsetWithinSegment * 2 + 1) * tierSize;
-        WriteValue(charOffset, tierSize, value);
-    }
 
     private ulong ReadValue(int offset, int tierSize)
     {
@@ -66,27 +56,5 @@ internal sealed class Segment
             8 => BinaryPrimitives.ReadUInt64LittleEndian(span),
             _ => throw new InvalidOperationException($"Unsupported tier size: {tierSize}")
         };
-    }
-
-    private void WriteValue(int offset, int tierSize, ulong value)
-    {
-        var span = _data.AsSpan(offset, tierSize);
-        switch (tierSize)
-        {
-            case 1:
-                span[0] = (byte)value;
-                break;
-            case 2:
-                BinaryPrimitives.WriteUInt16LittleEndian(span, (ushort)value);
-                break;
-            case 4:
-                BinaryPrimitives.WriteUInt32LittleEndian(span, (uint)value);
-                break;
-            case 8:
-                BinaryPrimitives.WriteUInt64LittleEndian(span, value);
-                break;
-            default:
-                throw new InvalidOperationException($"Unsupported tier size: {tierSize}");
-        }
     }
 }

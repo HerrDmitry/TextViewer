@@ -8,35 +8,36 @@ namespace TextViewer.Tests.Services;
 /// <summary>
 /// Preservation property tests for LineIndex max caching bugfix.
 /// These tests verify existing LineIndex behavior is unchanged:
-/// - GetByteLength(i) returns correct values after AppendByteLengths
-/// - GetCharLength(i) returns correct values after SetCharLength
+/// - GetByteLength(i) returns correct values after AppendLinePairs
+/// - GetCharLength(i) returns correct values after AppendLinePairs
 /// - LineCount equals total appended lines
-///
-/// Run on UNFIXED code: tests MUST PASS (confirms baseline to preserve).
 ///
 /// **Validates: Requirements 3.1, 3.2, 3.3, 3.4, 3.5**
 /// </summary>
 public class LineIndexMaxCachingPreservationTests
 {
     /// <summary>
-    /// Generates random byte length arrays with 1–50 elements, values 1–100000.
+    /// Generates random LinePair arrays with 1–50 elements, byte values 1–100000,
+    /// char values &lt;= byte values.
     /// </summary>
-    private static Arbitrary<ulong[]> ByteLengthSpans()
+    private static Arbitrary<LinePair[]> LinePairSpans()
     {
         var gen = Gen.Choose(1, 50)
             .SelectMany(len =>
                 Gen.ArrayOf(
                     Gen.Choose(1, 100000).Select(v => (ulong)v),
-                    len));
+                    len))
+            .Select(byteLengths => byteLengths.Select(b =>
+                new LinePair(b, b > 0 ? b - 1 : 0)).ToArray());
 
         return Arb.From(gen);
     }
 
     /// <summary>
-    /// Generates a pair of (byteLengths, charLengths) where each charLength[i] &lt;= byteLengths[i].
-    /// This respects the invariant that Char_Length ≤ Byte_Length for every line.
+    /// Generates LinePair arrays with explicit (byteLength, charLength) pairs
+    /// where charLength &lt;= byteLength.
     /// </summary>
-    private static Arbitrary<(ulong[] ByteLengths, ulong[] CharLengths)> ByteAndCharLengthPairs()
+    private static Arbitrary<LinePair[]> LinePairSpansWithCharLengths()
     {
         var gen = Gen.Choose(1, 50)
             .SelectMany(len =>
@@ -45,21 +46,20 @@ public class LineIndexMaxCachingPreservationTests
                     len))
             .SelectMany(byteLengths =>
             {
-                // Generate char lengths where each is <= corresponding byte length
                 var charGen = Gen.ArrayOf<int>(
                     Gen.Choose(0, int.MaxValue),
                     byteLengths.Length)
                     .Select(rands =>
                     {
-                        var chars = new ulong[byteLengths.Length];
+                        var pairs = new LinePair[byteLengths.Length];
                         for (int i = 0; i < byteLengths.Length; i++)
                         {
-                            // Map random int to range [1, byteLengths[i]]
-                            chars[i] = (ulong)(rands[i] % (int)Math.Min(byteLengths[i], 100000)) + 1;
+                            ulong charVal = (ulong)(rands[i] % (int)Math.Min(byteLengths[i], 100000)) + 1;
+                            pairs[i] = new LinePair(byteLengths[i], charVal);
                         }
-                        return chars;
+                        return pairs;
                     });
-                return charGen.Select(chars => (byteLengths, chars));
+                return charGen;
             });
 
         return Arb.From(gen);
@@ -68,8 +68,8 @@ public class LineIndexMaxCachingPreservationTests
     /// <summary>
     /// Property 2: Preservation - GetByteLength returns correct values
     ///
-    /// For any random ulong[] byte-length span appended to LineIndex,
-    /// GetByteLength(i) must return the exact value from the input array for each i.
+    /// For any random LinePair[] appended to LineIndex,
+    /// GetByteLength(i) must return the exact byte length from the input for each i.
     ///
     /// **Validates: Requirements 3.1, 3.2**
     /// </summary>
@@ -77,19 +77,19 @@ public class LineIndexMaxCachingPreservationTests
     public Property GetByteLength_Returns_CorrectValues_AfterAppend()
     {
         return Prop.ForAll(
-            ByteLengthSpans(),
-            (ulong[] byteLengths) =>
+            LinePairSpans(),
+            (LinePair[] pairs) =>
             {
                 var lineIndex = new LineIndex();
-                lineIndex.AppendByteLengths(byteLengths);
+                lineIndex.AppendLinePairs(pairs);
 
-                for (int i = 0; i < byteLengths.Length; i++)
+                for (int i = 0; i < pairs.Length; i++)
                 {
                     var actual = lineIndex.GetByteLength(i);
-                    if (actual != byteLengths[i])
+                    if (actual != pairs[i].ByteLength)
                     {
                         return false.Label(
-                            $"GetByteLength({i}) = {actual}, expected {byteLengths[i]}");
+                            $"GetByteLength({i}) = {actual}, expected {pairs[i].ByteLength}");
                     }
                 }
 
@@ -98,37 +98,30 @@ public class LineIndexMaxCachingPreservationTests
     }
 
     /// <summary>
-    /// Property 2: Preservation - GetCharLength returns correct values after SetCharLength
+    /// Property 2: Preservation - GetCharLength returns correct values after AppendLinePairs
     ///
-    /// For any random char lengths set on LineIndex lines (where charLength &lt;= byteLength),
-    /// GetCharLength(i) must return the exact value that was set.
+    /// For any random LinePair[] appended to LineIndex,
+    /// GetCharLength(i) must return the exact char length from the input.
     ///
     /// **Validates: Requirements 3.3, 3.4**
     /// </summary>
     [Property(MaxTest = 10)]
-    public Property GetCharLength_Returns_CorrectValues_AfterSet()
+    public Property GetCharLength_Returns_CorrectValues_AfterAppend()
     {
         return Prop.ForAll(
-            ByteAndCharLengthPairs(),
-            (pair) =>
+            LinePairSpansWithCharLengths(),
+            (LinePair[] pairs) =>
             {
-                var (byteLengths, charLengths) = pair;
                 var lineIndex = new LineIndex();
-                lineIndex.AppendByteLengths(byteLengths);
+                lineIndex.AppendLinePairs(pairs);
 
-                int charCount = Math.Min(byteLengths.Length, charLengths.Length);
-                for (int i = 0; i < charCount; i++)
-                {
-                    lineIndex.SetCharLength(i, charLengths[i]);
-                }
-
-                for (int i = 0; i < charCount; i++)
+                for (int i = 0; i < pairs.Length; i++)
                 {
                     var actual = lineIndex.GetCharLength(i);
-                    if (actual != charLengths[i])
+                    if (actual != pairs[i].CharLength)
                     {
                         return false.Label(
-                            $"GetCharLength({i}) = {actual}, expected {charLengths[i]}");
+                            $"GetCharLength({i}) = {actual}, expected {pairs[i].CharLength}");
                     }
                 }
 
@@ -139,7 +132,7 @@ public class LineIndexMaxCachingPreservationTests
     /// <summary>
     /// Property 2: Preservation - LineCount equals total appended lines
     ///
-    /// For any random ulong[] byte-length span appended to LineIndex,
+    /// For any random LinePair[] appended to LineIndex,
     /// LineCount must equal the length of the appended array.
     ///
     /// **Validates: Requirements 3.5**
@@ -148,16 +141,16 @@ public class LineIndexMaxCachingPreservationTests
     public Property LineCount_Equals_TotalAppendedLines()
     {
         return Prop.ForAll(
-            ByteLengthSpans(),
-            (ulong[] byteLengths) =>
+            LinePairSpans(),
+            (LinePair[] pairs) =>
             {
                 var lineIndex = new LineIndex();
-                lineIndex.AppendByteLengths(byteLengths);
+                lineIndex.AppendLinePairs(pairs);
 
                 var actual = lineIndex.LineCount;
 
-                return (actual == byteLengths.Length).Label(
-                    $"LineCount = {actual}, expected {byteLengths.Length}");
+                return (actual == pairs.Length).Label(
+                    $"LineCount = {actual}, expected {pairs.Length}");
             });
     }
 }

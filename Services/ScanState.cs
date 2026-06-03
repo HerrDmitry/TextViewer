@@ -3,12 +3,10 @@ namespace TextViewer.Services;
 public enum ScanState
 {
     NotStarted = 0,
-    QuickScanInProgress = 1,
-    QuickScanComplete = 2,
-    FullScanInProgress = 3,
-    FullScanComplete = 4,
-    Failed = 5,
-    Cancelled = 6
+    ScanInProgress = 1,
+    ScanComplete = 2,
+    Failed = 3,
+    Cancelled = 4
 }
 
 /// <summary>Reason a scan failed or was cancelled.</summary>

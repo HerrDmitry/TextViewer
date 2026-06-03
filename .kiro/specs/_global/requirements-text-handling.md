@@ -66,7 +66,7 @@ The flow has two phases: (1) an initial view delivered proactively by the backen
 
 #### Acceptance Criteria
 
-1. WHEN FileViewService scan reaches FullScanComplete state for a session, THE backend SHALL send a "scan-complete" message via Message_Bus to the frontend with the View_Session_ID as payload
+1. WHEN FileViewService scan reaches ScanComplete state for a session, THE backend SHALL send a "scan-complete" message via Message_Bus to the frontend with the View_Session_ID as payload
 2. THE backend SHALL send each Scan_Complete_Notification as a Backend_Push via Message_Bus_Host without requiring a prior request from the frontend
 3. THE frontend SHALL subscribe to "scan-complete" messages on Message_Bus_Client and associate received notifications with the corresponding tab by matching the View_Session_ID in the payload to the tab's stored View_Session_ID; WHEN a matching notification is received, THE frontend SHALL initiate a refresh View_Request per Requirement 2 criteria
 4. IF a "scan-complete" message is received with a View_Session_ID that does not match any currently open tab, THEN THE frontend SHALL discard the notification without error; discarding a notification SHALL NOT prevent the frontend from initiating View_Requests for other sessions or for the same session if a matching tab is subsequently opened
@@ -146,8 +146,8 @@ The flow has two phases: (1) an initial view delivered proactively by the backen
 #### Acceptance Criteria
 
 1. WHEN a file is opened and scan data is available for the active tab's View_Session_ID, THE Vertical_Scrollbar SHALL set its Scrollbar_Max to the total line count from the FileIndex Line_Index for that session
-2. WHEN the caller observes ScanState = QuickScanComplete or FullScanComplete for the active tab's session, THE Vertical_Scrollbar SHALL update its Scrollbar_Max to the final total line count from the FileIndex Line_Index
-3. WHILE ScanState = QuickScanInProgress for the active tab's session, THE Vertical_Scrollbar SHALL set its Scrollbar_Max to the total number of lines discovered so far in the Line_Index, updated at each Progressive_Update_Interval
+2. WHEN the caller observes ScanState = ScanComplete for the active tab's session, THE Vertical_Scrollbar SHALL update its Scrollbar_Max to the final total line count from the FileIndex Line_Index
+3. WHILE ScanState = ScanInProgress for the active tab's session, THE Vertical_Scrollbar SHALL set its Scrollbar_Max to the total number of lines discovered so far in the Line_Index, updated at each Progressive_Update_Interval
 4. IF the total line count is zero (empty file), THEN THE Vertical_Scrollbar SHALL set Scrollbar_Max to zero and remain in a disabled or non-interactive state
 5. WHEN the active tab changes to a different tab, THE Vertical_Scrollbar SHALL update its Scrollbar_Max to reflect the line count of the newly active tab's session
 6. THE Vertical_Scrollbar SHALL be rendered as a visual scrollbar track with a thumb indicator positioned at the right edge of the Text_View_Area, alongside a numeric label displaying the Scrollbar_Max value at the bottom of the track
@@ -159,10 +159,10 @@ The flow has two phases: (1) an initial view delivered proactively by the backen
 #### Acceptance Criteria
 
 1. WHEN a file is opened and scan data is available for the active tab's View_Session_ID, THE Horizontal_Scrollbar SHALL set its Scrollbar_Max to the maximum Char_Length across all lines in the FileIndex Line_Index for that session
-2. WHEN the caller observes ScanState = FullScanComplete for the active tab's session, THE Horizontal_Scrollbar SHALL update its Scrollbar_Max to the final maximum Char_Length across all lines from the FileIndex Line_Index
-3. WHILE ScanState = QuickScanInProgress for the active tab's session, THE Horizontal_Scrollbar SHALL set its Scrollbar_Max to the maximum Byte_Length across all lines discovered so far in the Line_Index (bytes per line, not decoded characters), updated at each Progressive_Update_Interval
-4. WHILE ScanState = FullScanInProgress for the active tab's session, THE Horizontal_Scrollbar SHALL set its Scrollbar_Max to the maximum Char_Length across all lines computed so far in the Line_Index (actual decoded characters), updated at each Progressive_Update_Interval
-5. WHEN the caller observes ScanState = QuickScanComplete AND FullScanInProgress has not yet started, THE Horizontal_Scrollbar SHALL display the maximum Byte_Length as an interim Scrollbar_Max until Char_Length values become available
+2. WHEN the caller observes ScanState = ScanComplete for the active tab's session, THE Horizontal_Scrollbar SHALL update its Scrollbar_Max to the final maximum Char_Length across all lines from the FileIndex Line_Index
+3. WHILE ScanState = ScanInProgress for the active tab's session, THE Horizontal_Scrollbar SHALL set its Scrollbar_Max to the maximum Byte_Length across all lines discovered so far in the Line_Index (bytes per line, not decoded characters), updated at each Progressive_Update_Interval
+4. WHEN ScanState transitions to ScanComplete, THE Horizontal_Scrollbar SHALL switch from Byte_Length to Char_Length as the source for Scrollbar_Max
+5. WHEN ScanState transitions to ScanComplete, THE Horizontal_Scrollbar SHALL use the final maximum Char_Length as its Scrollbar_Max
 6. IF the maximum width value is zero (empty file or all lines have zero length), THEN THE Horizontal_Scrollbar SHALL set Scrollbar_Max to zero and remain in a disabled or non-interactive state
 7. WHEN the active tab changes to a different tab, THE Horizontal_Scrollbar SHALL update its Scrollbar_Max to reflect the maximum width of the newly active tab's session
 8. THE Horizontal_Scrollbar SHALL be rendered as a visual scrollbar track with a thumb indicator positioned at the bottom edge of the Text_View_Area, alongside a numeric label displaying the Scrollbar_Max value at the right end of the track
@@ -173,9 +173,9 @@ The flow has two phases: (1) an initial view delivered proactively by the backen
 
 #### Acceptance Criteria
 
-1. WHILE ScanState = QuickScanInProgress or FullScanInProgress for the active tab's session, THE frontend SHALL poll the FileIndex Line_Index at a Progressive_Update_Interval of 100 milliseconds and update the Vertical_Scrollbar and Horizontal_Scrollbar Scrollbar_Max values with the current scan progress
-2. THE progressive polling SHALL begin when the frontend observes ScanState transition to QuickScanInProgress for the active tab's session and SHALL cease when ScanState transitions to QuickScanComplete, FullScanComplete, Failed, or Cancelled
-3. WHEN progressive polling is active and the scan transitions from QuickScanInProgress to FullScanInProgress, THE frontend SHALL continue polling at the same Progressive_Update_Interval without interruption; the Horizontal_Scrollbar source value SHALL transition from maximum Byte_Length to maximum Char_Length at the point where FullScanInProgress is observed
-4. WHEN the scan completes (ScanState transitions to QuickScanComplete or FullScanComplete), THE frontend SHALL perform one final update to set both scrollbar Scrollbar_Max values to the definitive final values from the completed scan phase, regardless of the polling interval
+1. WHILE ScanState = ScanInProgress for the active tab's session, THE frontend SHALL poll the FileIndex Line_Index at a Progressive_Update_Interval of 100 milliseconds and update the Vertical_Scrollbar and Horizontal_Scrollbar Scrollbar_Max values with the current scan progress
+2. THE progressive polling SHALL begin when the frontend observes ScanState transition to ScanInProgress for the active tab's session and SHALL cease when ScanState transitions to ScanComplete, Failed, or Cancelled
+3. WHEN progressive polling is active, THE Horizontal_Scrollbar source SHALL use maximum Byte_Length (since char lengths are not yet finalized during scan); upon ScanComplete the source switches to maximum Char_Length
+4. WHEN the scan completes (ScanState transitions to ScanComplete), THE frontend SHALL perform one final update to set both scrollbar Scrollbar_Max values to the definitive final values
 5. IF the active tab changes while progressive polling is active, THEN THE frontend SHALL stop polling for the previously active tab and start polling for the newly active tab if its session scan is still in progress
 6. IF the active tab's session ScanState is Failed or Cancelled, THEN THE frontend SHALL stop progressive polling and set both scrollbar Scrollbar_Max values to zero

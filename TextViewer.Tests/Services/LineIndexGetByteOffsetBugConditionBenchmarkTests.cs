@@ -18,22 +18,23 @@ public class LineIndexGetByteOffsetBugConditionBenchmarkTests
     {
         const int lineCount = 200_000;
         var rng = new Random(12345);
-        var byteLengths = new ulong[lineCount];
+        var pairs = new LinePair[lineCount];
         for (int i = 0; i < lineCount; i++)
         {
-            byteLengths[i] = (ulong)rng.Next(1, 4096);
+            var byteLen = (ulong)rng.Next(1, 4096);
+            pairs[i] = new LinePair(byteLen, byteLen > 0 ? byteLen - 1 : 0);
         }
 
         var index = new LineIndex();
-        index.AppendByteLengths(byteLengths);
+        index.AppendLinePairs(pairs);
 
         var nearEofQueries = BuildNearEofQueries(lineCount, 10_000);
         var randomQueries = BuildRandomQueries(lineCount, 10_000, 54321);
         var sequentialQueries = BuildSequentialWindowQueries(120_000, 10_000);
 
-        var nearEof = MeasureMedianTicks(index, nearEofQueries, byteLengths);
-        var random = MeasureMedianTicks(index, randomQueries, byteLengths);
-        var sequential = MeasureMedianTicks(index, sequentialQueries, byteLengths);
+        var nearEof = MeasureMedianTicks(index, nearEofQueries, pairs);
+        var random = MeasureMedianTicks(index, randomQueries, pairs);
+        var sequential = MeasureMedianTicks(index, sequentialQueries, pairs);
 
         _output.WriteLine($"[GetByteOffset benchmark] lineCount={lineCount}");
         _output.WriteLine($"[GetByteOffset benchmark] near-EOF median ticks/query: {nearEof}");
@@ -45,7 +46,7 @@ public class LineIndexGetByteOffsetBugConditionBenchmarkTests
         Assert.True(sequential > 0);
     }
 
-    private static long MeasureMedianTicks(LineIndex index, int[] queries, ulong[] byteLengths)
+    private static long MeasureMedianTicks(LineIndex index, int[] queries, LinePair[] pairs)
     {
         var timings = new long[5];
 
@@ -64,7 +65,7 @@ public class LineIndexGetByteOffsetBugConditionBenchmarkTests
 
             if (checksum == 0)
             {
-                checksum = VerifyOneQuery(index, queries[^1], byteLengths);
+                checksum = VerifyOneQuery(index, queries[^1], pairs);
             }
 
             timings[run] = sw.ElapsedTicks / queries.Length;
@@ -74,12 +75,12 @@ public class LineIndexGetByteOffsetBugConditionBenchmarkTests
         return timings[timings.Length / 2];
     }
 
-    private static ulong VerifyOneQuery(LineIndex index, int lineIndex, ulong[] byteLengths)
+    private static ulong VerifyOneQuery(LineIndex index, int lineIndex, LinePair[] pairs)
     {
         ulong expected = 0;
         for (int i = 0; i < lineIndex; i++)
         {
-            expected += byteLengths[i];
+            expected += pairs[i].ByteLength;
         }
 
         var actual = index.GetByteOffset(lineIndex);

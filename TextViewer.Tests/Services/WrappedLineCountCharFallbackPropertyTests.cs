@@ -6,55 +6,41 @@ using TextViewer.Services;
 namespace TextViewer.Tests.Services;
 
 /// <summary>
-/// Property 4: Char-length fallback.
-/// For any line where GetCharLength returns null, the handler SHALL use GetByteLength
-/// for that line's visual row computation, producing the same result as if charLen
-/// were the byte length value.
+/// Property 4: Char-length usage in wrapped line count computation.
+/// For any LineIndex with char lengths set via AppendLinePairs, ComputeWrappedLineCount
+/// SHALL use GetCharLength for each line's visual row computation.
 ///
-/// Feature: wrapped-line-count, Property 4: Char-length fallback
+/// Feature: wrapped-line-count, Property 4: Char-length in visual rows
 ///
 /// **Validates: Requirements 1.4**
 /// </summary>
 public class WrappedLineCountCharFallbackPropertyTests
 {
     /// <summary>
-    /// Test case: byte lengths for all lines, char lengths written for a prefix [0..writeUpTo),
-    /// remaining lines have null char length (fallback to byte length).
+    /// Test case: LinePairs with explicit byte and char lengths, colCount for wrapping.
     /// </summary>
     private sealed record TestCase(
-        ulong[] ByteLengths,
-        ulong[] CharLengthsPrefix,
-        int WriteUpTo,
+        LinePair[] Pairs,
         int ColCount);
 
     /// <summary>
-    /// Generates LineIndex with mixed null/non-null char lengths.
+    /// Generates LineIndex with various char lengths (charLength &lt;= byteLength).
     /// ByteLengths: 2-50 lines, values 0-500.
-    /// WriteUpTo: 0 to lineCount-1 (at least one line without char length).
-    /// CharLengthsPrefix: values &lt;= corresponding byte length for [0..writeUpTo).
+    /// CharLengths: values &lt;= corresponding byte length.
     /// ColCount: 1-100.
     /// </summary>
-    private static Arbitrary<TestCase> CharFallbackTestCases()
+    private static Arbitrary<TestCase> CharLengthTestCases()
     {
         var gen = Gen.Choose(2, 50).SelectMany(lineCount =>
             Gen.ArrayOf(
                 Gen.Choose(0, 500).Select(v => (ulong)v),
                 lineCount)
             .SelectMany(byteLengths =>
-                // writeUpTo: 0 to lineCount-1 ensures at least one null line
-                Gen.Choose(0, byteLengths.Length - 1).SelectMany(writeUpTo =>
-                {
-                    if (writeUpTo == 0)
-                    {
-                        // No char lengths written - all lines fall back
-                        return Gen.Choose(1, 100)
-                            .Select(col => new TestCase(byteLengths, Array.Empty<ulong>(), 0, col));
-                    }
-
-                    // Generate char lengths for the prefix, each <= byte length
-                    return Gen.ArrayOf(
-                        Gen.Choose(0, 500).Select(v => (ulong)v),
-                        writeUpTo)
+            {
+                // Generate char lengths, each <= byte length
+                var charGen = Gen.ArrayOf(
+                    Gen.Choose(0, 500).Select(v => (ulong)v),
+                    byteLengths.Length)
                     .Select(charLens =>
                     {
                         // Clamp each char length to <= byte length
@@ -64,64 +50,57 @@ public class WrappedLineCountCharFallbackPropertyTests
                                 charLens[i] = byteLengths[i];
                         }
                         return charLens;
-                    })
-                    .SelectMany(charLens =>
-                        Gen.Choose(1, 100)
-                            .Select(col => new TestCase(byteLengths, charLens, writeUpTo, col)));
-                })));
+                    });
+
+                return charGen.SelectMany(charLengths =>
+                    Gen.Choose(1, 100)
+                        .Select(col =>
+                        {
+                            var pairs = new LinePair[byteLengths.Length];
+                            for (int i = 0; i < byteLengths.Length; i++)
+                            {
+                                pairs[i] = new LinePair(byteLengths[i], charLengths[i]);
+                            }
+                            return new TestCase(pairs, col);
+                        }));
+            }));
 
         return Arb.From(gen);
     }
 
     /// <summary>
-    /// Property 4: Char-length fallback
+    /// Property 4: Char-length usage
     ///
-    /// For any LineIndex with mixed null/non-null char lengths, ComputeWrappedLineCount
+    /// For any LineIndex with char lengths set via AppendLinePairs, ComputeWrappedLineCount
     /// SHALL produce the same result as computing sequentially with the rule:
-    /// use charLen if available, else use byteLen; then ceil(len/colCount) or 1 if len==0.
+    /// use charLen for each line; then ceil(len/colCount) or 1 if len==0.
     ///
     /// **Validates: Requirements 1.4**
     /// </summary>
     [Property(MaxTest = 10)]
-    public Property CharLengthFallback_UsesByteLength_WhenCharLengthNull()
+    public Property CharLength_UsedForVisualRowComputation()
     {
         return Prop.ForAll(
-            CharFallbackTestCases(),
+            CharLengthTestCases(),
             (TestCase tc) =>
             {
-                // Build a real LineIndex with the specified byte lengths
+                // Build a real LineIndex with the specified pairs
                 var lineIndex = new LineIndex();
-                lineIndex.AppendByteLengths(tc.ByteLengths);
+                lineIndex.AppendLinePairs(tc.Pairs);
 
-                // Write char lengths for the prefix [0..writeUpTo)
-                for (int i = 0; i < tc.WriteUpTo; i++)
-                {
-                    lineIndex.SetCharLength(i, tc.CharLengthsPrefix[i]);
-                }
-
-                // Compute expected result using the fallback rule
+                // Compute expected result using char lengths
                 long expected = 0;
-                for (int i = 0; i < tc.ByteLengths.Length; i++)
+                for (int i = 0; i < tc.Pairs.Length; i++)
                 {
-                    long len;
-                    if (i < tc.WriteUpTo)
-                    {
-                        // Char length is available
-                        len = (long)tc.CharLengthsPrefix[i];
-                    }
-                    else
-                    {
-                        // Fallback to byte length
-                        len = (long)tc.ByteLengths[i];
-                    }
+                    long len = (long)tc.Pairs[i].CharLength;
                     expected += len == 0 ? 1 : (len + tc.ColCount - 1) / tc.ColCount;
                 }
 
                 // Compute actual
-                long actual = Program.ComputeWrappedLineCount(lineIndex, tc.ByteLengths.Length, tc.ColCount);
+                long actual = Program.ComputeWrappedLineCount(lineIndex, tc.Pairs.Length, tc.ColCount);
 
                 return (actual == expected).Label(
-                    $"Expected {expected}, got {actual}. ColCount={tc.ColCount}, Lines={tc.ByteLengths.Length}, WriteUpTo={tc.WriteUpTo}");
+                    $"Expected {expected}, got {actual}. ColCount={tc.ColCount}, Lines={tc.Pairs.Length}");
             });
     }
 }

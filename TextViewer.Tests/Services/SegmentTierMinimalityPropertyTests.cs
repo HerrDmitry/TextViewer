@@ -6,16 +6,16 @@ using TextViewer.Services;
 namespace TextViewer.Tests.Services;
 
 /// <summary>
-/// Property-based tests for segment tier minimality.
-/// Validates: Requirements 4.4, 5.1
+/// Feature: unified-scan-pass, Property 6: Segment tier minimality
+/// Validates: Requirements 7.3, 8.1
 /// </summary>
 public class SegmentTierMinimalityPropertyTests
 {
     /// <summary>
-    /// Generates random ulong values spanning all four tier boundaries:
-    /// Byte (0–255), UShort (256–65535), UInt (65536–4294967295), ULong (>4294967295)
+    /// Generates random LinePair arrays spanning all four tier boundaries.
+    /// charLength is always ≤ byteLength to match real invariant.
     /// </summary>
-    private static Arbitrary<ulong[]> ByteLengthArrays()
+    private static Arbitrary<LinePair[]> LinePairArrays()
     {
         var tierByte = Gen.Choose(0, 255).Select(v => (ulong)v);
         var tierUShort = Gen.Choose(256, 65535).Select(v => (ulong)v);
@@ -24,11 +24,14 @@ public class SegmentTierMinimalityPropertyTests
         var tierULong = Gen.Choose(1, int.MaxValue)
             .Select(v => (ulong)v + 4294967295UL);
 
-        var anyValue = Gen.OneOf(tierByte, tierUShort, tierUInt, tierULong);
+        var anyByteLength = Gen.OneOf(tierByte, tierUShort, tierUInt, tierULong);
 
-        var gen = Gen.Choose(0, 1000)
-            .SelectMany(len => Gen.ArrayOf(anyValue, len))
-            .Select(arr => arr.Select(v => v).ToArray());
+        var pairGen = anyByteLength.SelectMany(bl =>
+            Gen.Choose(0, (int)Math.Min(bl, (ulong)int.MaxValue))
+               .Select(cl => new LinePair(bl, (ulong)cl)));
+
+        var gen = Gen.Choose(1, 1000)
+            .SelectMany(len => Gen.ArrayOf(pairGen, len));
 
         return Arb.From(gen);
     }
@@ -46,26 +49,21 @@ public class SegmentTierMinimalityPropertyTests
     };
 
     /// <summary>
-    /// Property 3: Segment tier minimality
-    /// For any segment in the Line_Index, the IntegerTier of that segment SHALL be the
-    /// smallest tier whose maximum value is >= the maximum Byte_Length stored in that segment.
-    /// Since Char_Length ≤ Byte_Length for every line, both values in every pair are guaranteed
-    /// to fit within the selected tier.
+    /// Property 6: Segment tier minimality
+    /// For any segment in the Line_Index, the IntegerTier SHALL be the smallest tier
+    /// whose max representable value ≥ the maximum Byte_Length stored in that segment.
     ///
-    /// Validates: Requirements 4.4, 5.1
+    /// **Validates: Requirements 7.3, 8.1**
     /// </summary>
     [Property(MaxTest = 10)]
     public Property SegmentTier_IsMinimalForMaxByteLengthInSegment()
     {
         return Prop.ForAll(
-            ByteLengthArrays(),
-            (ulong[] byteLengths) =>
+            LinePairArrays(),
+            (LinePair[] pairs) =>
             {
-                if (byteLengths.Length == 0)
-                    return true.Label("Empty array — no segments to check");
-
                 var directory = new SegmentDirectory();
-                directory.Append(byteLengths, 0);
+                directory.Append(pairs, 0);
 
                 var segments = directory.Segments;
 
@@ -82,7 +80,7 @@ public class SegmentTierMinimalityPropertyTests
                             maxByteLengthInSegment = byteLen;
                     }
 
-                    // Assert: segment tier == selectTier(max Byte_Length in segment)
+                    // Tier must equal selectTier(max Byte_Length in segment)
                     var expectedTier = SegmentDirectory.SelectTier(maxByteLengthInSegment);
                     if (segment.Tier != expectedTier)
                     {
@@ -91,7 +89,7 @@ public class SegmentTierMinimalityPropertyTests
                             $"tier={segment.Tier} but expected={expectedTier} for maxByteLength={maxByteLengthInSegment}");
                     }
 
-                    // Assert: both values in every pair fit within the selected tier
+                    // All values must fit within the tier
                     var tierMax = TierMaxValue(segment.Tier);
                     for (int i = 0; i < segment.Count; i++)
                     {
@@ -101,13 +99,13 @@ public class SegmentTierMinimalityPropertyTests
                         if (byteLen > tierMax)
                         {
                             return false.Label(
-                                $"Segment {s}, line offset {i}: byteLen={byteLen} exceeds tier max={tierMax} (tier={segment.Tier})");
+                                $"Segment {s}, offset {i}: byteLen={byteLen} exceeds tier max={tierMax}");
                         }
 
                         if (charLen > tierMax)
                         {
                             return false.Label(
-                                $"Segment {s}, line offset {i}: charLen={charLen} exceeds tier max={tierMax} (tier={segment.Tier})");
+                                $"Segment {s}, offset {i}: charLen={charLen} exceeds tier max={tierMax}");
                         }
                     }
                 }

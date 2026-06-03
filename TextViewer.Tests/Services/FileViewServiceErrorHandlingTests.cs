@@ -72,7 +72,7 @@ public class FileViewServiceErrorHandlingTests : IDisposable
 
         // Wait for scan to complete
         var timeout = DateTime.UtcNow.AddSeconds(10);
-        while (service.ScanState < ScanState.QuickScanComplete && DateTime.UtcNow < timeout)
+        while (service.ScanState < ScanState.ScanComplete && DateTime.UtcNow < timeout)
         {
             await Task.Delay(10);
         }

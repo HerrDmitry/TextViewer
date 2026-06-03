@@ -203,7 +203,7 @@ GetViewAsync(startLine, startCol, rowCount, colCount, ct):
 
     // 2. Snapshot line count (volatile read)
     scannedLines = _fileIndex.Index.LineCount
-    scanComplete = _fileIndex.State >= ScanState.QuickScanComplete
+    scanComplete = _fileIndex.State >= ScanState.ScanComplete
 
     // 3. Edge cases
     if scanComplete AND scannedLines == 0: return Success([""])
@@ -394,7 +394,7 @@ Config: `[Property(MaxTest = 10)]` per workspace testing policy.
 | Test | Validates |
 |------|-----------|
 | 4 concurrent requests → all correct | Req 5.1 |
-| Request during QuickScan → partial result | Req 1.4, 2.3 |
+| Request during scan → partial result | Req 1.4, 2.3 |
 | Real UTF-8 file end-to-end | Req 1, 4 |
 | Real UTF-16 file end-to-end | Req 4.1 |
 | Real UTF-32 LE/BE files w/ BOM | Req 4.1, 4.5 |

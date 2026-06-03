@@ -26,9 +26,9 @@ public class FullScanAndDisposalTests
 
             await fileIndex.StartScanAsync();
 
-            // After StartScanAsync completes on a valid file, state should be FullScanComplete
-            // (not QuickScanComplete), proving Full_Scan ran automatically
-            Assert.Equal(ScanState.FullScanComplete, fileIndex.State);
+            // After StartScanAsync completes on a valid file, state should be ScanComplete
+            // (unified scan ran)
+            Assert.Equal(ScanState.ScanComplete, fileIndex.State);
         }
         finally
         {
@@ -55,14 +55,13 @@ public class FullScanAndDisposalTests
 
             await fileIndex.StartScanAsync();
 
-            Assert.Equal(ScanState.FullScanComplete, fileIndex.State);
+            Assert.Equal(ScanState.ScanComplete, fileIndex.State);
             Assert.Equal(1, fileIndex.Index.LineCount);
 
             // "A😀中B" → string.Length = 5 (A=1, 😀=2 surrogates, 中=1, B=1)
             var expectedCharLength = "A😀中B".Length; // 5
             var charLength = fileIndex.Index.GetCharLength(0);
-            Assert.NotNull(charLength);
-            Assert.Equal((ulong)expectedCharLength, charLength.Value);
+            Assert.Equal((ulong)expectedCharLength, charLength);
         }
         finally
         {
@@ -91,13 +90,12 @@ public class FullScanAndDisposalTests
 
             await fileIndex.StartScanAsync();
 
-            Assert.Equal(ScanState.FullScanComplete, fileIndex.State);
+            Assert.Equal(ScanState.ScanComplete, fileIndex.State);
             Assert.Equal(1, fileIndex.Index.LineCount);
 
             // Char_Length should be 3 ("abc"), BOM excluded
             var charLength = fileIndex.Index.GetCharLength(0);
-            Assert.NotNull(charLength);
-            Assert.Equal(3UL, charLength.Value);
+            Assert.Equal(3UL, charLength);
         }
         finally
         {
@@ -124,7 +122,7 @@ public class FullScanAndDisposalTests
 
             await fileIndex.StartScanAsync();
 
-            Assert.Equal(ScanState.FullScanComplete, fileIndex.State);
+            Assert.Equal(ScanState.ScanComplete, fileIndex.State);
             Assert.Equal(1, fileIndex.Index.LineCount);
 
             // Verify char length: decode "A" + 0xFF + 0xFE + "B" with ReplacementFallback
@@ -136,8 +134,7 @@ public class FullScanAndDisposalTests
             var expectedLength = encoding.GetString(contentBytes).Length;
 
             var charLength = fileIndex.Index.GetCharLength(0);
-            Assert.NotNull(charLength);
-            Assert.Equal((ulong)expectedLength, charLength.Value);
+            Assert.Equal((ulong)expectedLength, charLength);
         }
         finally
         {
@@ -258,23 +255,19 @@ public class FullScanAndDisposalTests
             await fileIndex.StartScanAsync();
             await cancelTask;
 
-            // Either we caught Full_Scan cancellation (Cancelled + LineCount preserved)
-            // or the scan completed before cancellation fired (FullScanComplete).
+            // Either we caught cancellation (Cancelled + LineCount cleared)
+            // or the scan completed before cancellation fired (ScanComplete).
             // Both outcomes are valid — the key invariant is:
-            // IF Cancelled AND LineCount > 0, Quick_Scan data was preserved.
+            // IF Cancelled, Line_Index is cleared (unified scan aborts fully).
             if (fileIndex.State == ScanState.Cancelled)
             {
-                if (fileIndex.Index.LineCount > 0)
-                {
-                    // Cancellation hit during Full_Scan — Quick_Scan data preserved
-                    Assert.Equal(5000, fileIndex.Index.LineCount);
-                }
-                // else: cancellation hit during Quick_Scan — LineCount cleared (also valid)
+                // Cancellation during unified scan → LineIndex cleared
+                Assert.Equal(0, fileIndex.Index.LineCount);
             }
             else
             {
                 // Scan completed before cancellation
-                Assert.Equal(ScanState.FullScanComplete, fileIndex.State);
+                Assert.Equal(ScanState.ScanComplete, fileIndex.State);
                 Assert.Equal(5000, fileIndex.Index.LineCount);
             }
         }
@@ -301,7 +294,7 @@ public class FullScanAndDisposalTests
 
             await fileIndex.StartScanAsync();
 
-            Assert.Equal(ScanState.FullScanComplete, fileIndex.State);
+            Assert.Equal(ScanState.ScanComplete, fileIndex.State);
             Assert.Equal((ulong)fileSize, fileIndex.Index.GetByteOffset(fileIndex.Index.LineCount));
         }
         finally
@@ -328,11 +321,11 @@ public class FullScanAndDisposalTests
 
             await fileIndex.StartScanAsync();
 
-            // Verify phase transitions are logged at Information level
+            // Verify scan transitions are logged at Information level
             Assert.Contains(testLogger.LogEntries,
-                e => e.Level == LogLevel.Information && e.Message.Contains("Full_Scan complete"));
+                e => e.Level == LogLevel.Information && e.Message.Contains("Scan complete"));
             Assert.Contains(testLogger.LogEntries,
-                e => e.Level == LogLevel.Information && e.Message.Contains("Quick_Scan complete"));
+                e => e.Level == LogLevel.Information && e.Message.Contains("scan started"));
 
             // Verify no Error-level logs for a successful scan
             Assert.DoesNotContain(testLogger.LogEntries,
@@ -359,7 +352,7 @@ public class FullScanAndDisposalTests
 
             await fileIndex.StartScanAsync();
 
-            Assert.Equal(ScanState.FullScanComplete, fileIndex.State);
+            Assert.Equal(ScanState.ScanComplete, fileIndex.State);
             Assert.Equal(2, fileIndex.Index.LineCount);
             Assert.Equal(3UL, fileIndex.Index.GetCharLength(0));
             Assert.Equal(3UL, fileIndex.Index.GetCharLength(1));

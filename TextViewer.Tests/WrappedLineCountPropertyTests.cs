@@ -32,13 +32,8 @@ public class WrappedLineCountPropertyTests : IDisposable
         var lineIndex = new LineIndex();
         if (lineLengths.Length == 0) return lineIndex;
 
-        var byteLengths = lineLengths.Select(l => (ulong)l).ToArray();
-        lineIndex.AppendByteLengths(byteLengths);
-
-        for (int i = 0; i < lineLengths.Length; i++)
-        {
-            lineIndex.SetCharLength(i, (ulong)lineLengths[i]);
-        }
+        var pairs = lineLengths.Select(l => new LinePair((ulong)l, (ulong)l)).ToArray();
+        lineIndex.AppendLinePairs(pairs);
 
         return lineIndex;
     }
@@ -253,7 +248,7 @@ public class WrappedLineCountPropertyTests : IDisposable
     private static void WaitForScanSync(FileViewService service, int timeoutMs = 5000)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        while (service.ScanState < ScanState.QuickScanComplete && sw.ElapsedMilliseconds < timeoutMs)
+        while (service.ScanState < ScanState.ScanComplete && sw.ElapsedMilliseconds < timeoutMs)
         {
             Thread.Sleep(10);
         }

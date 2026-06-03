@@ -66,10 +66,8 @@ export interface ViewDimensions {
 /** Mirrors backend ScanState enum values */
 export type ScanStateValue =
   | 'NotStarted'
-  | 'QuickScanInProgress'
-  | 'QuickScanComplete'
-  | 'FullScanInProgress'
-  | 'FullScanComplete'
+  | 'ScanInProgress'
+  | 'ScanComplete'
   | 'Failed'
   | 'Cancelled';
 

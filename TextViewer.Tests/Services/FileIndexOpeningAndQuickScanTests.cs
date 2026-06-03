@@ -367,8 +367,8 @@ public class FileIndexOpeningAndQuickScanTests
 
             await fileIndex.StartScanAsync();
 
-            // After both Quick_Scan and Full_Scan complete
-            Assert.Equal(ScanState.FullScanComplete, fileIndex.State);
+            // After both phases complete in unified scan
+            Assert.Equal(ScanState.ScanComplete, fileIndex.State);
         }
         finally
         {
