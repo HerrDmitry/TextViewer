@@ -45,9 +45,9 @@ public class FileViewServiceResultCountPropertyTests : IDisposable
         var logger = NullLogger<FileViewService>.Instance;
         var service = new FileViewService(path, CancellationToken.None, logger);
 
-        // Wait for scan to complete (QuickScanComplete or beyond)
+        // Wait for scan to complete (ScanComplete or beyond)
         var timeout = DateTime.UtcNow.AddSeconds(10);
-        while (service.ScanState < ScanState.QuickScanComplete && DateTime.UtcNow < timeout)
+        while (service.ScanState < ScanState.ScanComplete && DateTime.UtcNow < timeout)
         {
             await Task.Delay(10);
         }

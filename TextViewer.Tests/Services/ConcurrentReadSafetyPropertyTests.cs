@@ -7,15 +7,16 @@ using TextViewer.Services;
 namespace TextViewer.Tests.Services;
 
 /// <summary>
-/// Property-based tests for concurrent read safety (no torn values).
-/// Validates: Requirements 4.1, 4.2, 4.3
+/// Property-based tests for concurrent read safety of LineIndex.
+/// Feature: unified-scan-pass, Property 5: Concurrent read safety
 /// </summary>
 public class ConcurrentReadSafetyPropertyTests
 {
     /// <summary>
-    /// Generates random ulong[] byteLengths (100–1000 lines) with values spanning tier boundaries.
+    /// Generates LinePair arrays (50–500 lines) with values spanning tier boundaries.
+    /// CharLength always &lt;= ByteLength.
     /// </summary>
-    private static Arbitrary<ulong[]> ByteLengthArrays()
+    private static Arbitrary<LinePair[]> LinePairArrays()
     {
         var tierByte = Gen.Choose(1, 255).Select(v => (ulong)v);
         var tierUShort = Gen.Choose(256, 65535).Select(v => (ulong)v);
@@ -24,59 +25,41 @@ public class ConcurrentReadSafetyPropertyTests
         var tierULong = Gen.Choose(1, int.MaxValue)
             .Select(v => (ulong)v + 4294967295UL);
 
-        var anyValue = Gen.OneOf(tierByte, tierUShort, tierUInt, tierULong);
+        var anyByteLen = Gen.OneOf(tierByte, tierUShort, tierUInt, tierULong);
 
-        var gen = Gen.Choose(100, 1000)
-            .SelectMany(len => Gen.ArrayOf(anyValue, len))
-            .Select(arr => arr.Select(v => v).ToArray());
+        var pairGen = anyByteLen.SelectMany(byteLen =>
+        {
+            var charLen = Gen.Choose(0, (int)Math.Min(byteLen, (ulong)int.MaxValue))
+                .Select(v => (ulong)v);
+            return charLen.Select(cl => new LinePair(byteLen, cl));
+        });
+
+        var gen = Gen.Choose(50, 500)
+            .SelectMany(len => Gen.ArrayOf(pairGen, len));
 
         return Arb.From(gen);
     }
 
     /// <summary>
-    /// Generates char lengths that are always &lt;= the corresponding byte length.
-    /// </summary>
-    private static ulong[] GenerateCharLengths(ulong[] byteLengths, Random rng)
-    {
-        var charLengths = new ulong[byteLengths.Length];
-        for (int i = 0; i < byteLengths.Length; i++)
-        {
-            // Char length is always <= byte length
-            charLengths[i] = (ulong)rng.NextInt64(0, (long)Math.Min(byteLengths[i], (ulong)long.MaxValue) + 1);
-        }
-        return charLengths;
-    }
-
-    /// <summary>
-    /// Record of an observation made by a reader thread.
-    /// </summary>
-    private record struct Observation(
-        int LineIndex,
-        string Method,
-        ulong? Value,
-        bool ThrewException);
-
-    /// <summary>
-    /// Property 7: Concurrent read safety (no torn values)
-    /// For any interleaving of a single writer thread appending/updating Line_Index pairs
-    /// and multiple reader threads querying GetByteLength, GetCharLength, or GetByteOffset,
-    /// every reader SHALL observe either the complete previous value or the complete new value
-    /// — never a partially-written intermediate state.
+    /// Property 5: Concurrent read safety
     ///
-    /// Validates: Requirements 4.1, 4.2, 4.3
+    /// For any interleaving of a single writer thread appending line pairs and multiple
+    /// reader threads querying the Line_Index, every reader SHALL observe either a complete,
+    /// previously-written value or the absence of the line (lineIndex >= LineCount).
+    /// No torn or partially-updated pair SHALL ever be observable.
+    ///
+    /// **Validates: Requirements 7.1, 7.2, 3.3**
     /// </summary>
     [Property(MaxTest = 10)]
     public Property ConcurrentReads_NeverObserveTornValues()
     {
         return Prop.ForAll(
-            ByteLengthArrays(),
-            (ulong[] byteLengths) =>
+            LinePairArrays(),
+            (LinePair[] pairs) =>
             {
                 var lineIndex = new LineIndex();
-                var observations = new ConcurrentBag<Observation>();
+                var observations = new ConcurrentBag<(int LineIdx, string Method, ulong Value)>();
                 var writerDone = new ManualResetEventSlim(false);
-                var rng = new Random(42);
-                var charLengths = GenerateCharLengths(byteLengths, rng);
 
                 // Start 4 reader threads
                 var readerTasks = new Task[4];
@@ -100,150 +83,107 @@ public class ConcurrentReadSafetyPropertyTests
                             try
                             {
                                 var byteLen = lineIndex.GetByteLength(queryIndex);
-                                observations.Add(new Observation(queryIndex, "GetByteLength", byteLen, false));
+                                observations.Add((queryIndex, "GetByteLength", byteLen));
                             }
                             catch (ArgumentOutOfRangeException)
                             {
-                                // Race: lineCount changed between read and query — acceptable
-                                observations.Add(new Observation(queryIndex, "GetByteLength", null, true));
+                                // Race on lineCount boundary — acceptable
                             }
 
                             // Read GetCharLength
                             try
                             {
                                 var charLen = lineIndex.GetCharLength(queryIndex);
-                                observations.Add(new Observation(queryIndex, "GetCharLength", charLen, false));
+                                observations.Add((queryIndex, "GetCharLength", charLen));
                             }
                             catch (ArgumentOutOfRangeException)
                             {
-                                observations.Add(new Observation(queryIndex, "GetCharLength", null, true));
+                                // Race on lineCount boundary — acceptable
                             }
 
-                            // Read GetByteOffset for a small index to keep it fast
-                            if (queryIndex <= 50)
+                            // Read GetByteOffset for small indices to keep test fast
+                            if (queryIndex <= 30)
                             {
                                 try
                                 {
                                     var offset = lineIndex.GetByteOffset(queryIndex);
-                                    observations.Add(new Observation(queryIndex, "GetByteOffset", offset, false));
+                                    observations.Add((queryIndex, "GetByteOffset", offset));
                                 }
                                 catch (ArgumentOutOfRangeException)
                                 {
-                                    observations.Add(new Observation(queryIndex, "GetByteOffset", null, true));
+                                    // Race on lineCount boundary — acceptable
                                 }
                             }
 
                             Thread.Yield();
                         }
 
-                        // One final read pass after writer is done
-                        var finalLineCount = lineIndex.LineCount;
-                        if (finalLineCount > 0)
+                        // Final reads after writer done
+                        var finalCount = lineIndex.LineCount;
+                        if (finalCount > 0)
                         {
-                            int idx = readerRng.Next(0, finalLineCount);
+                            int idx = readerRng.Next(0, finalCount);
                             try
                             {
-                                var byteLen = lineIndex.GetByteLength(idx);
-                                observations.Add(new Observation(idx, "GetByteLength", byteLen, false));
-                            }
-                            catch (ArgumentOutOfRangeException) { }
-
-                            try
-                            {
-                                var charLen = lineIndex.GetCharLength(idx);
-                                observations.Add(new Observation(idx, "GetCharLength", charLen, false));
+                                observations.Add((idx, "GetByteLength", lineIndex.GetByteLength(idx)));
+                                observations.Add((idx, "GetCharLength", lineIndex.GetCharLength(idx)));
                             }
                             catch (ArgumentOutOfRangeException) { }
                         }
                     });
                 }
 
-                // Writer thread: append byteLengths in batches, then write char lengths
+                // Writer thread: append pairs in batches of 10
                 var writerTask = Task.Run(() =>
                 {
-                    // Phase 1: Append byte lengths in batches of 10
-                    int batchSize = 10;
-                    for (int i = 0; i < byteLengths.Length; i += batchSize)
+                    const int batchSize = 10;
+                    for (int i = 0; i < pairs.Length; i += batchSize)
                     {
-                        int count = Math.Min(batchSize, byteLengths.Length - i);
-                        var batch = byteLengths.AsSpan(i, count);
-                        lineIndex.AppendByteLengths(batch);
-                        Thread.Yield(); // Give readers a chance to interleave
+                        int count = Math.Min(batchSize, pairs.Length - i);
+                        lineIndex.AppendLinePairs(pairs.AsSpan(i, count));
+                        Thread.Yield();
                     }
-
-                    // Phase 2: Write char lengths sequentially
-                    for (int i = 0; i < charLengths.Length; i++)
-                    {
-                        lineIndex.SetCharLength(i, charLengths[i]);
-                        if (i % 5 == 0)
-                            Thread.Yield(); // Give readers a chance to interleave
-                    }
-
                     writerDone.Set();
                 });
 
-                // Wait for all tasks to complete
                 Task.WaitAll([writerTask, .. readerTasks]);
 
-                // Validate observations
-                foreach (var obs in observations)
+                // Validate: every observation must match expected value
+                foreach (var (lineIdx, method, value) in observations)
                 {
-                    if (obs.ThrewException)
-                        continue; // Race condition on lineCount boundary — acceptable
-
-                    switch (obs.Method)
+                    switch (method)
                     {
                         case "GetByteLength":
                         {
-                            // Every observed byte length must match the original value
-                            var expected = byteLengths[obs.LineIndex];
-                            if (obs.Value != expected)
-                            {
+                            var expected = pairs[lineIdx].ByteLength;
+                            if (value != expected)
                                 return false.Label(
-                                    $"Torn read: GetByteLength({obs.LineIndex}) returned {obs.Value} " +
-                                    $"but expected {expected}");
-                            }
+                                    $"Torn read: GetByteLength({lineIdx}) = {value}, expected {expected}");
                             break;
                         }
-
                         case "GetCharLength":
                         {
-                            // GetCharLength must be null (not yet written) or the final value
-                            if (obs.Value.HasValue)
-                            {
-                                var expectedChar = charLengths[obs.LineIndex];
-                                if (obs.Value.Value != expectedChar)
-                                {
-                                    return false.Label(
-                                        $"Torn read: GetCharLength({obs.LineIndex}) returned {obs.Value.Value} " +
-                                        $"but expected null or {expectedChar}");
-                                }
-                            }
-                            // null is acceptable (not yet written by Full_Scan)
+                            var expected = pairs[lineIdx].CharLength;
+                            if (value != expected)
+                                return false.Label(
+                                    $"Torn read: GetCharLength({lineIdx}) = {value}, expected {expected}");
                             break;
                         }
-
                         case "GetByteOffset":
                         {
-                            // GetByteOffset must be consistent: sum of byte lengths [0..lineIndex-1]
                             ulong expectedOffset = 0;
-                            for (int i = 0; i < obs.LineIndex; i++)
-                            {
-                                expectedOffset += byteLengths[i];
-                            }
-                            if (obs.Value != expectedOffset)
-                            {
+                            for (int i = 0; i < lineIdx; i++)
+                                expectedOffset += pairs[i].ByteLength;
+                            if (value != expectedOffset)
                                 return false.Label(
-                                    $"Torn read: GetByteOffset({obs.LineIndex}) returned {obs.Value} " +
-                                    $"but expected {expectedOffset}");
-                            }
+                                    $"Torn read: GetByteOffset({lineIdx}) = {value}, expected {expectedOffset}");
                             break;
                         }
                     }
                 }
 
                 return true.Label(
-                    $"All {observations.Count} observations consistent (no torn reads)");
+                    $"All {observations.Count} concurrent observations consistent");
             });
     }
 }

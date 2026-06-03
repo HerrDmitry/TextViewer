@@ -36,12 +36,12 @@ public class BackendHandlerTests : IDisposable
     }
 
     /// <summary>
-    /// Waits for a FileViewService to reach at least QuickScanComplete state.
+    /// Waits for a FileViewService to reach at least ScanComplete state.
     /// </summary>
     private async Task WaitForScan(FileViewService service, int timeoutMs = 5000)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        while (service.ScanState < ScanState.QuickScanComplete && sw.ElapsedMilliseconds < timeoutMs)
+        while (service.ScanState < ScanState.ScanComplete && sw.ElapsedMilliseconds < timeoutMs)
         {
             await Task.Delay(10);
         }
@@ -598,11 +598,11 @@ public class BackendHandlerTests : IDisposable
     #region scan-complete (MonitorScanState) tests
 
     /// <summary>
-    /// Test scan-complete sent only at FullScanComplete (not QuickScanComplete).
+    /// Test scan-complete sent at ScanComplete.
     /// Validates: Requirements 3.1, 3.2
     /// </summary>
     [Fact]
-    public async Task MonitorScanState_SendsOnlyAtFullScanComplete()
+    public async Task MonitorScanState_SendsAtScanComplete()
     {
         // Arrange
         var filePath = CreateTempFile("Line1\nLine2\nLine3\n");
@@ -615,9 +615,9 @@ public class BackendHandlerTests : IDisposable
         // Act - start monitoring
         var monitorTask = Program.MonitorScanState(service, sessionId, messageBus);
 
-        // Wait for full scan to complete
+        // Wait for scan to complete
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        while (service.ScanState < ScanState.FullScanComplete && sw.ElapsedMilliseconds < 5000)
+        while (service.ScanState < ScanState.ScanComplete && sw.ElapsedMilliseconds < 5000)
         {
             await Task.Delay(10);
         }
@@ -639,9 +639,6 @@ public class BackendHandlerTests : IDisposable
 
     /// <summary>
     /// Test MonitorScanState exits on Failed state.
-    /// Note: Due to enum ordering (Failed=5 >= FullScanComplete=4), the >= check
-    /// catches Failed state and sends scan-complete before the explicit Failed check.
-    /// This test documents the actual behavior.
     /// Validates: Requirements 3.1
     /// </summary>
     [Fact]

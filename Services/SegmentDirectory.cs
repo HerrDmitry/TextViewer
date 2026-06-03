@@ -55,48 +55,59 @@ internal sealed class SegmentDirectory
     }
 
     /// <summary>
-    /// Appends pairs, creating/extending segments with optimal tier selection.
-    /// Tier determined by max byte length value (first element of each pair).
-    /// Each line is stored as a pair (byteLength, 0) — char length filled later.
-    /// Uses batch-level buffer to avoid per-extend copies.
+    /// Backwards-compat overload: appends byte lengths only (charLength = 0).
+    /// Removed in task 7.x migration.
     /// </summary>
-    public void Append(ReadOnlySpan<ulong> byteLengths, int startLineIndex)
+    [Obsolete("Use Append(ReadOnlySpan<LinePair>, int)")]
+    public void Append(ulong[] byteLengths, int startLineIndex)
     {
-        if (byteLengths.IsEmpty)
+        var pairs = new LinePair[byteLengths.Length];
+        for (int i = 0; i < byteLengths.Length; i++)
+            pairs[i] = new LinePair(byteLengths[i], 0);
+        Append((ReadOnlySpan<LinePair>)pairs, startLineIndex);
+    }
+
+    /// <summary>
+    /// Appends complete pairs, creating segments with optimal tier selection.
+    /// Tier determined by max byte length value in each run (charLength ≤ byteLength always fits).
+    /// </summary>
+    public void Append(ReadOnlySpan<LinePair> pairs, int startLineIndex)
+    {
+        if (pairs.IsEmpty)
             return;
 
         // Process values in runs of same tier — one segment per run, no extending
         int i = 0;
-        while (i < byteLengths.Length)
+        while (i < pairs.Length)
         {
-            var tier = SelectTier(byteLengths[i]);
-            int runLength = CountRunFittingTierWithNarrowing(byteLengths, i, tier);
+            var tier = SelectTier(pairs[i].ByteLength);
+            int runLength = CountRunFittingTierWithNarrowing(pairs, i, tier);
 
-            // Recalculate tier based on actual max in run
+            // Recalculate tier based on actual max byteLength in run
             ulong maxInRun = 0;
             for (int j = i; j < i + runLength; j++)
             {
-                if (byteLengths[j] > maxInRun)
-                    maxInRun = byteLengths[j];
+                if (pairs[j].ByteLength > maxInRun)
+                    maxInRun = pairs[j].ByteLength;
             }
             tier = SelectTier(maxInRun);
 
             // Single allocation per run — no copy-extend
-            CreateSegment(startLineIndex + i, byteLengths.Slice(i, runLength), tier);
+            CreateSegment(startLineIndex + i, pairs.Slice(i, runLength), tier);
             i += runLength;
         }
 
         // No merge during append — segments stay as-is for O(N) performance.
         // Use Optimize() for offline/test optimization if needed.
 
-        TotalLines = startLineIndex + byteLengths.Length;
+        TotalLines = startLineIndex + pairs.Length;
     }
 
     /// <summary>
     /// Counts consecutive lines fitting the given tier, with narrowing check.
-    /// Used for both new segments and extending existing ones.
+    /// Tier selection based on ByteLength (charLength ≤ byteLength guarantees fit).
     /// </summary>
-    private static int CountRunFittingTierWithNarrowing(ReadOnlySpan<ulong> byteLengths, int startIndex, IntegerTier tier)
+    private static int CountRunFittingTierWithNarrowing(ReadOnlySpan<LinePair> pairs, int startIndex, IntegerTier tier)
     {
         ulong maxValue = tier switch
         {
@@ -108,15 +119,15 @@ internal sealed class SegmentDirectory
         };
 
         int count = 0;
-        for (int j = startIndex; j < byteLengths.Length; j++)
+        for (int j = startIndex; j < pairs.Length; j++)
         {
-            if (byteLengths[j] > maxValue)
+            if (pairs[j].ByteLength > maxValue)
                 break;
 
-            var lineTier = SelectTier(byteLengths[j]);
+            var lineTier = SelectTier(pairs[j].ByteLength);
             if (lineTier < tier)
             {
-                int remainingLines = byteLengths.Length - j;
+                int remainingLines = pairs.Length - j;
                 int currentTierSize = (int)tier;
                 int narrowTierSize = (int)lineTier;
                 int memorySaved = remainingLines * 2 * (currentTierSize - narrowTierSize);
@@ -314,17 +325,6 @@ internal sealed class SegmentDirectory
         TotalLines = 0;
     }
 
-    /// <summary>
-    /// Updates the char-length slot of an existing pair in-place.
-    /// Writes to the second value in the pair at the given line index.
-    /// </summary>
-    public void SetCharLength(int lineIndex, ulong charLength)
-    {
-        var segment = FindSegment(lineIndex);
-        int offset = lineIndex - segment.StartLine;
-        segment.SetCharLength(offset, charLength);
-    }
-
     /// <summary>Selects the smallest tier that can hold the given value.</summary>
     internal static IntegerTier SelectTier(ulong maxByteLength)
     {
@@ -334,19 +334,19 @@ internal sealed class SegmentDirectory
         return IntegerTier.ULong;
     }
 
-    private void CreateSegment(int startLine, ReadOnlySpan<ulong> byteLengths, IntegerTier tier)
+    private void CreateSegment(int startLine, ReadOnlySpan<LinePair> pairs, IntegerTier tier)
     {
         int tierSize = (int)tier;
-        byte[] data = new byte[byteLengths.Length * 2 * tierSize];
+        byte[] data = new byte[pairs.Length * 2 * tierSize];
 
-        for (int i = 0; i < byteLengths.Length; i++)
+        for (int i = 0; i < pairs.Length; i++)
         {
             int byteOffset = i * 2 * tierSize;
-            WriteValue(data, byteOffset, tierSize, byteLengths[i]);
-            // Char length slot initialized to 0 (already zero in new array)
+            WriteValue(data, byteOffset, tierSize, pairs[i].ByteLength);
+            WriteValue(data, byteOffset + tierSize, tierSize, pairs[i].CharLength);
         }
 
-        var segment = new Segment(startLine, byteLengths.Length, tier, data);
+        var segment = new Segment(startLine, pairs.Length, tier, data);
         _segments.Add(segment);
     }
 

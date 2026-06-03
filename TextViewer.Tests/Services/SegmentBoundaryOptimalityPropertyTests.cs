@@ -7,19 +7,19 @@ namespace TextViewer.Tests.Services;
 
 /// <summary>
 /// Property-based tests for segment boundary optimality.
-/// Validates: Requirements 5.2, 5.3
+/// Feature: unified-scan-pass, Property 7: Segment boundary optimality
+/// Validates: Requirements 8.2, 8.3
 /// </summary>
 public class SegmentBoundaryOptimalityPropertyTests
 {
     private const int MetadataCost = 9;
 
     /// <summary>
-    /// Generates ulong arrays with tier-crossing patterns to exercise segment boundary decisions.
-    /// Values span all four tiers: Byte (0-255), UShort (256-65535), UInt (65536-4294967295), ULong (>4294967295).
+    /// Generates LinePair arrays with tier-crossing patterns to exercise segment boundary decisions.
+    /// ByteLength spans all four tiers; CharLength ≤ ByteLength (guaranteed by design).
     /// </summary>
-    private static Arbitrary<ulong[]> TierCrossingArrays()
+    private static Arbitrary<LinePair[]> TierCrossingLinePairs()
     {
-        // Generators for values in each tier
         var byteTier = Gen.Choose(0, 255).Select(v => (ulong)v);
         var ushortTier = Gen.Choose(256, 65535).Select(v => (ulong)v);
         var uintTier = Gen.Choose(65536, int.MaxValue).Select(v => (ulong)v)
@@ -27,11 +27,15 @@ public class SegmentBoundaryOptimalityPropertyTests
         var ulongTier = Gen.Constant((ulong)4294967296)
             .Or(Gen.Constant(ulong.MaxValue));
 
-        // Mix values from different tiers to create tier-crossing patterns
         var anyTierValue = Gen.OneOf(byteTier, ushortTier, uintTier, ulongTier);
 
+        // CharLength ≤ ByteLength: generate as fraction of ByteLength
+        var pairGen = anyTierValue.SelectMany(byteLen =>
+            Gen.Choose(0, (int)Math.Min(byteLen, (ulong)int.MaxValue))
+                .Select(charLen => new LinePair(byteLen, (ulong)charLen)));
+
         var gen = Gen.Choose(1, 200)
-            .SelectMany(len => Gen.ArrayOf(anyTierValue, len));
+            .SelectMany(len => Gen.ArrayOf(pairGen, len));
 
         return Arb.From(gen);
     }
@@ -58,9 +62,9 @@ public class SegmentBoundaryOptimalityPropertyTests
     }
 
     /// <summary>
-    /// Gets the maximum byte length value stored in a segment by reading all pairs.
+    /// Gets the maximum byte length value stored in a segment.
     /// </summary>
-    private static ulong GetMaxValueInSegment(Segment segment)
+    private static ulong GetMaxByteLengthInSegment(Segment segment)
     {
         ulong max = 0;
         for (int i = 0; i < segment.Count; i++)
@@ -72,24 +76,22 @@ public class SegmentBoundaryOptimalityPropertyTests
     }
 
     /// <summary>
-    /// Property 4: Segment boundary optimality
+    /// Property 7: Segment boundary optimality (merge check)
     /// 
-    /// For any pair of adjacent segments, merging them into a single segment
-    /// (using the wider tier) SHALL NOT reduce total memory consumption (data + metadata),
-    /// AND splitting any segment further SHALL NOT reduce total memory consumption.
+    /// For any pair of adjacent segments, merging them into one SHALL NOT reduce
+    /// total memory consumption. After Optimize(), no profitable merge exists.
     ///
-    /// **Validates: Requirements 5.2, 5.3**
+    /// **Validates: Requirements 8.2, 8.3**
     /// </summary>
     [Property(MaxTest = 10)]
     public Property MergingAdjacentSegments_DoesNotReduceMemory()
     {
         return Prop.ForAll(
-            TierCrossingArrays(),
-            (ulong[] byteLengths) =>
+            TierCrossingLinePairs(),
+            (LinePair[] pairs) =>
             {
-                // Build segments using the real SegmentDirectory
                 var directory = new SegmentDirectory();
-                directory.Append(byteLengths, 0);
+                directory.Append(pairs, 0);
                 directory.Optimize();
 
                 var segments = directory.Segments;
@@ -97,21 +99,17 @@ public class SegmentBoundaryOptimalityPropertyTests
                 if (segments.Count < 2)
                     return true.Label("Fewer than 2 segments — merge check trivially passes");
 
-                // Check every pair of adjacent segments: merging should NOT reduce memory
                 for (int i = 0; i < segments.Count - 1; i++)
                 {
                     var seg1 = segments[i];
                     var seg2 = segments[i + 1];
 
-                    // Current memory for the two separate segments
                     long currentMemory = SegmentMemory(seg1.Count, seg1.Tier)
                                        + SegmentMemory(seg2.Count, seg2.Tier);
 
-                    // If merged: tier = selectTier(max of both segments' max values)
-                    ulong max1 = GetMaxValueInSegment(seg1);
-                    ulong max2 = GetMaxValueInSegment(seg2);
-                    ulong mergedMax = Math.Max(max1, max2);
-                    var mergedTier = SelectTier(mergedMax);
+                    ulong max1 = GetMaxByteLengthInSegment(seg1);
+                    ulong max2 = GetMaxByteLengthInSegment(seg2);
+                    var mergedTier = SelectTier(Math.Max(max1, max2));
 
                     long mergedMemory = SegmentMemory(seg1.Count + seg2.Count, mergedTier);
 
@@ -131,39 +129,37 @@ public class SegmentBoundaryOptimalityPropertyTests
     }
 
     /// <summary>
-    /// Property 4: Segment boundary optimality (split check)
+    /// Property 7: Segment boundary optimality (split check)
     /// 
-    /// For any segment, splitting it at any point should NOT reduce total memory.
-    /// Split produces two segments with their own optimal tiers.
+    /// For any single segment, splitting it at any point SHALL NOT reduce
+    /// total memory consumption. After Optimize(), no profitable split exists.
     ///
-    /// **Validates: Requirements 5.2, 5.3**
+    /// **Validates: Requirements 8.2, 8.3**
     /// </summary>
     [Property(MaxTest = 10)]
     public Property SplittingAnySegment_DoesNotReduceMemory()
     {
         return Prop.ForAll(
-            TierCrossingArrays(),
-            (ulong[] byteLengths) =>
+            TierCrossingLinePairs(),
+            (LinePair[] pairs) =>
             {
-                // Build segments using the real SegmentDirectory
                 var directory = new SegmentDirectory();
-                directory.Append(byteLengths, 0);
+                directory.Append(pairs, 0);
                 directory.Optimize();
 
                 var segments = directory.Segments;
+
                 for (int s = 0; s < segments.Count; s++)
                 {
                     var segment = segments[s];
 
                     if (segment.Count < 2)
-                        continue; // Can't split a single-element segment
+                        continue;
 
                     long currentMemory = SegmentMemory(segment.Count, segment.Tier);
 
-                    // Try every possible split point within this segment
                     for (int splitAt = 1; splitAt < segment.Count; splitAt++)
                     {
-                        // Determine max values in each half
                         ulong maxLeft = 0;
                         for (int i = 0; i < splitAt; i++)
                         {

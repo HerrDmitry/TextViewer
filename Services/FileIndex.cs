@@ -4,8 +4,8 @@ using Microsoft.Extensions.Logging;
 namespace TextViewer.Services;
 
 /// <summary>
-/// Scans a single file in two phases (Quick_Scan → Full_Scan) to build a
-/// memory-compact, thread-safe index of per-line metadata.
+/// Scans a single file in a unified single pass to build a memory-compact,
+/// thread-safe index of per-line metadata (byte lengths + char lengths).
 /// Thread-safe for concurrent reads of State, Error, and Index properties.
 /// </summary>
 public sealed class FileIndex : IDisposable
@@ -25,13 +25,13 @@ public sealed class FileIndex : IDisposable
         Index = new LineIndex();
     }
 
-    /// <summary>Thread-safe current scan phase.</summary>
+    /// <summary>Thread-safe current scan state.</summary>
     public ScanState State => _state;
 
     /// <summary>Thread-safe error description (null when no error).</summary>
     public string? Error => _error;
 
-    /// <summary>Thread-safe line index (readable after QuickScanComplete).</summary>
+    /// <summary>Thread-safe line index (readable after ScanComplete).</summary>
     public LineIndex Index { get; }
 
     /// <summary>Detected file encoding (set during scan, defaults to UTF-8 when no BOM present).</summary>
@@ -41,8 +41,8 @@ public sealed class FileIndex : IDisposable
     public int BomByteLength { get; private set; } = 0;
 
     /// <summary>
-    /// Starts the two-phase scan. Quick_Scan runs first, then Full_Scan automatically.
-    /// Returns when both phases complete, fail, or are cancelled.
+    /// Starts the unified single-pass scan.
+    /// Returns when scan completes, fails, or is cancelled.
     /// </summary>
     public async Task<Result<ScanSummary, ScanError>> StartScanAsync()
     {
@@ -82,22 +82,22 @@ public sealed class FileIndex : IDisposable
                 new ScanError(ScanErrorCode.IoError, _error));
         }
 
-        // File opened successfully — transition to QuickScanInProgress
-        _state = ScanState.QuickScanInProgress;
-        _logger.LogInformation("Quick_Scan started for {FilePath}", _filePath);
+        // File opened — transition to ScanInProgress
+        _state = ScanState.ScanInProgress;
+        _logger.LogInformation("Unified scan started for {FilePath}", _filePath);
 
-        // --- Quick_Scan phase ---
+        // --- Unified scan ---
         try
         {
-            await RunQuickScanAsync();
+            await RunUnifiedScanAsync();
         }
         catch (OperationCanceledException)
         {
             Index.Clear();
             _state = ScanState.Cancelled;
-            _logger.LogInformation("Quick_Scan cancelled for {FilePath}", _filePath);
+            _logger.LogInformation("Scan cancelled for {FilePath}", _filePath);
             return Result<ScanSummary, ScanError>.Failure(
-                new ScanError(ScanErrorCode.Cancelled, $"Quick_Scan cancelled for {_filePath}"));
+                new ScanError(ScanErrorCode.Cancelled, $"Scan cancelled for {_filePath}"));
         }
         catch (IOException ex)
         {
@@ -116,45 +116,10 @@ public sealed class FileIndex : IDisposable
             _logger.LogInformation(ex, "Scan failed for {FilePath}: OutOfMemoryException", _filePath);
             return Result<ScanSummary, ScanError>.Failure(
                 new ScanError(ScanErrorCode.OutOfMemory, _error));
-        }
-
-        _state = ScanState.QuickScanComplete;
-        _logger.LogInformation("Quick_Scan complete for {FilePath}", _filePath);
-
-        // --- Full_Scan phase ---
-        _state = ScanState.FullScanInProgress;
-        _logger.LogInformation("Full_Scan started for {FilePath}", _filePath);
-
-        try
-        {
-            await RunFullScanAsync();
-        }
-        catch (OperationCanceledException)
-        {
-            // Quick_Scan data preserved — do NOT clear LineIndex
-            _state = ScanState.Cancelled;
-            _logger.LogInformation("Full_Scan cancelled for {FilePath}", _filePath);
-            return Result<ScanSummary, ScanError>.Failure(
-                new ScanError(ScanErrorCode.Cancelled, $"Full_Scan cancelled for {_filePath}"));
-        }
-        catch (OutOfMemoryException ex)
-        {
-            _error = $"Scan failed for {_filePath}: OutOfMemoryException";
-            _state = ScanState.Failed;
-            _logger.LogInformation(ex, "Scan failed for {FilePath}: OutOfMemoryException", _filePath);
-            return Result<ScanSummary, ScanError>.Failure(
-                new ScanError(ScanErrorCode.OutOfMemory, _error));
-        }
-        catch (IOException ex)
-        {
-            _error = $"Scan failed for {_filePath}: IOException";
-            _state = ScanState.Failed;
-            _logger.LogInformation(ex, "Scan failed for {FilePath}: IOException", _filePath);
-            return Result<ScanSummary, ScanError>.Failure(
-                new ScanError(ScanErrorCode.IoError, _error));
         }
         catch (Exception ex)
         {
+            Index.Clear();
             _error = $"Scan failed for {_filePath}: {ex.GetType().Name}";
             _state = ScanState.Failed;
             _logger.LogInformation(ex, "Scan failed for {FilePath}: {ExceptionType}", _filePath, ex.GetType().Name);
@@ -162,26 +127,48 @@ public sealed class FileIndex : IDisposable
                 new ScanError(ScanErrorCode.Unknown, _error));
         }
 
-        Index.FinalizeCharLengths();
-        _state = ScanState.FullScanComplete;
-        _logger.LogInformation("Full_Scan complete for {FilePath}", _filePath);
+        _state = ScanState.ScanComplete;
+        _logger.LogInformation("Scan complete for {FilePath}", _filePath);
 
         return Result<ScanSummary, ScanError>.Success(
             new ScanSummary(Index.LineCount, Encoding, BomByteLength));
     }
 
-    private async Task RunQuickScanAsync()
+    /// <summary>
+    /// Unified single-pass scan: BOM detection + sequential line scanning with
+    /// simultaneous byte length and char length computation.
+    /// </summary>
+    private async Task RunUnifiedScanAsync()
     {
+        // Step 1: Detect BOM (read up to 4 bytes, set Encoding + BomByteLength)
+        (Encoding encoding, int bomByteLength) = await DetectEncodingAsync();
+
+        // Step 2: Create decoder with replacement fallback
+        Encoding decoderEncoding = Encoding.GetEncoding(
+            encoding.CodePage,
+            EncoderFallback.ReplacementFallback,
+            DecoderFallback.ReplacementFallback);
+        Decoder decoder = decoderEncoding.GetDecoder();
+
+        // Step 3: Seek to start (BOM bytes included in first line's byte length,
+        // but excluded from char count)
+        _stream!.Seek(0, SeekOrigin.Begin);
+
+        // Step 4: Sequential read loop
         const int BufferSize = 65536; // 64KB
         const int BatchSize = 1000;
 
         var buffer = new byte[BufferSize];
-        var batch = new List<ulong>(BatchSize);
-        ulong currentLineBytes = 0;
+        var batch = new List<LinePair>(BatchSize);
+
+        // Accumulate content bytes for current line (excluding delimiter and BOM)
+        var lineContentBytes = new MemoryStream();
+        ulong currentLineBytes = 0; // total bytes for current line (content + delimiter + BOM on first)
         bool previousByteWasCR = false;
+        int bomBytesRemaining = bomByteLength; // track BOM bytes to skip from content
 
         int bytesRead;
-        while ((bytesRead = await _stream!.ReadAsync(buffer.AsMemory(0, BufferSize), _cancellationToken)) > 0)
+        while ((bytesRead = await _stream.ReadAsync(buffer.AsMemory(0, BufferSize), _cancellationToken)) > 0)
         {
             for (int i = 0; i < bytesRead; i++)
             {
@@ -194,25 +181,32 @@ public sealed class FileIndex : IDisposable
                     {
                         // CRLF: CR was already counted, add LF byte
                         currentLineBytes += 1; // the LF byte
-                        batch.Add(currentLineBytes);
+                        // Emit line pair (content already accumulated without CR)
+                        ulong charLength = ComputeCharLength(decoder, lineContentBytes);
+                        batch.Add(new LinePair(currentLineBytes, charLength));
                         currentLineBytes = 0;
+                        lineContentBytes.SetLength(0);
+                        decoder.Reset();
 
                         if (batch.Count >= BatchSize)
                         {
-                            Index.AppendByteLengths(batch.ToArray());
+                            Index.AppendLinePairs(batch.ToArray());
                             batch.Clear();
                         }
                         continue;
                     }
                     else
                     {
-                        // Standalone CR — line already includes the CR byte
-                        batch.Add(currentLineBytes);
+                        // Standalone CR — emit line (content accumulated without CR)
+                        ulong charLength = ComputeCharLength(decoder, lineContentBytes);
+                        batch.Add(new LinePair(currentLineBytes, charLength));
                         currentLineBytes = 0;
+                        lineContentBytes.SetLength(0);
+                        decoder.Reset();
 
                         if (batch.Count >= BatchSize)
                         {
-                            Index.AppendByteLengths(batch.ToArray());
+                            Index.AppendLinePairs(batch.ToArray());
                             batch.Clear();
                         }
                         // Fall through to process current byte 'b'
@@ -223,25 +217,38 @@ public sealed class FileIndex : IDisposable
                 {
                     // LF delimiter
                     currentLineBytes += 1; // the LF byte
-                    batch.Add(currentLineBytes);
+                    // Emit line pair
+                    ulong charLength = ComputeCharLength(decoder, lineContentBytes);
+                    batch.Add(new LinePair(currentLineBytes, charLength));
                     currentLineBytes = 0;
+                    lineContentBytes.SetLength(0);
+                    decoder.Reset();
 
                     if (batch.Count >= BatchSize)
                     {
-                        Index.AppendByteLengths(batch.ToArray());
+                        Index.AppendLinePairs(batch.ToArray());
                         batch.Clear();
                     }
                 }
                 else if (b == 0x0D)
                 {
-                    // CR — might be start of CRLF, peek at next byte
+                    // CR — might be start of CRLF
                     currentLineBytes += 1; // the CR byte
                     previousByteWasCR = true;
                 }
                 else
                 {
-                    // Regular content byte
+                    // Regular content byte (or BOM byte)
                     currentLineBytes += 1;
+                    if (bomBytesRemaining > 0)
+                    {
+                        // BOM byte: count in byte length but NOT in content for char decoding
+                        bomBytesRemaining--;
+                    }
+                    else
+                    {
+                        lineContentBytes.WriteByte(b);
+                    }
                 }
             }
 
@@ -249,169 +256,42 @@ public sealed class FileIndex : IDisposable
             _cancellationToken.ThrowIfCancellationRequested();
         }
 
+        // Step 5: Flush final line + remaining batch
+
         // Handle trailing CR at end of file (standalone CR as last byte)
         if (previousByteWasCR)
         {
-            // The CR byte was already counted in currentLineBytes
-            batch.Add(currentLineBytes);
+            ulong charLength = ComputeCharLength(decoder, lineContentBytes);
+            batch.Add(new LinePair(currentLineBytes, charLength));
             currentLineBytes = 0;
+            lineContentBytes.SetLength(0);
         }
 
-        // Handle final unterminated line (content bytes without trailing delimiter)
+        // Handle final unterminated line
         if (currentLineBytes > 0)
         {
-            batch.Add(currentLineBytes);
+            ulong charLength = ComputeCharLength(decoder, lineContentBytes);
+            batch.Add(new LinePair(currentLineBytes, charLength));
         }
 
         // Flush remaining batch
         if (batch.Count > 0)
         {
-            Index.AppendByteLengths(batch.ToArray());
+            Index.AppendLinePairs(batch.ToArray());
         }
     }
 
-    private async Task RunFullScanAsync()
+    /// <summary>
+    /// Computes char length by decoding the accumulated content bytes using the decoder.
+    /// </summary>
+    private static ulong ComputeCharLength(Decoder decoder, MemoryStream contentBytes)
     {
-        int lineCount = Index.LineCount;
-        if (lineCount == 0)
-            return;
+        if (contentBytes.Length == 0)
+            return 0;
 
-        // Seek stream back to beginning for Full_Scan
-        _stream!.Seek(0, SeekOrigin.Begin);
-
-        // Detect encoding from BOM by reading the first few bytes
-        (Encoding encoding, int bomByteLength) = await DetectEncodingAsync();
-
-        // Create a decoder with replacement fallback for invalid bytes
-        Encoding decoderEncoding = Encoding.GetEncoding(
-            encoding.CodePage,
-            EncoderFallback.ReplacementFallback,
-            DecoderFallback.ReplacementFallback);
-
-        // Seek back to start for sequential reading
-        _stream.Seek(0, SeekOrigin.Begin);
-
-        // Use a single reusable buffer to avoid per-line allocations
-        const int BufferSize = 65536;
-        byte[] buffer = new byte[BufferSize];
-        int bufferOffset = 0;
-        int bufferFilled = 0;
-
-        for (int lineIndex = 0; lineIndex < lineCount; lineIndex++)
-        {
-            if (lineIndex % 1000 == 0)
-            {
-                _cancellationToken.ThrowIfCancellationRequested();
-            }
-
-            int byteLength = (int)Index.GetByteLength(lineIndex);
-            if (byteLength == 0)
-            {
-                Index.SetCharLength(lineIndex, 0);
-                continue;
-            }
-
-            // We need to read the line bytes to know the delimiter, so read into buffer
-            int contentLength = 0;
-            int contentStart = 0;
-
-            // For lines that fit in buffer, decode directly
-            // For lines larger than buffer, accumulate via decoder
-            if (byteLength <= BufferSize)
-            {
-                // Ensure we have enough bytes in buffer
-                await EnsureBufferAsync(buffer, byteLength);
-                
-                int delimiterBytes = GetDelimiterByteCount(buffer, bufferOffset, byteLength);
-                contentStart = bufferOffset;
-                contentLength = byteLength - delimiterBytes;
-
-                // Exclude BOM from first line
-                if (lineIndex == 0 && bomByteLength > 0 && contentLength >= bomByteLength)
-                {
-                    contentStart += bomByteLength;
-                    contentLength -= bomByteLength;
-                }
-
-                ulong charLength = 0;
-                if (contentLength > 0)
-                {
-                    charLength = (ulong)decoderEncoding.GetCharCount(buffer, contentStart, contentLength);
-                }
-                Index.SetCharLength(lineIndex, charLength);
-                bufferOffset += byteLength;
-            }
-            else
-            {
-                // Large line: read in chunks, count chars
-                int remaining = byteLength;
-                int charCount = 0;
-                bool isFirstSegment = true;
-                var decoder = decoderEncoding.GetDecoder();
-
-                while (remaining > 0)
-                {
-                    await EnsureBufferAsync(buffer, Math.Min(remaining, BufferSize));
-                    int chunkSize = Math.Min(remaining, bufferFilled - bufferOffset);
-
-                    int start = bufferOffset;
-                    int len = chunkSize;
-
-                    // Last chunk: exclude delimiter
-                    if (remaining == chunkSize)
-                    {
-                        int delimiterBytes = GetDelimiterByteCount(buffer, bufferOffset, chunkSize);
-                        len -= delimiterBytes;
-                    }
-
-                    // First chunk of first line: exclude BOM
-                    if (lineIndex == 0 && isFirstSegment && bomByteLength > 0 && len >= bomByteLength)
-                    {
-                        start += bomByteLength;
-                        len -= bomByteLength;
-                    }
-
-                    if (len > 0)
-                    {
-                        bool flush = (remaining == chunkSize);
-                        charCount += decoder.GetCharCount(buffer, start, len, flush);
-                    }
-
-                    bufferOffset += chunkSize;
-                    remaining -= chunkSize;
-                    isFirstSegment = false;
-                }
-
-                Index.SetCharLength(lineIndex, (ulong)charCount);
-            }
-        }
-
-        // Local helper: ensure buffer has at least 'needed' bytes available from bufferOffset
-        async Task EnsureBufferAsync(byte[] buf, int needed)
-        {
-            int available = bufferFilled - bufferOffset;
-            if (available >= needed)
-                return;
-
-            // Shift remaining bytes to start of buffer
-            if (available > 0)
-            {
-                Buffer.BlockCopy(buf, bufferOffset, buf, 0, available);
-            }
-            bufferOffset = 0;
-            bufferFilled = available;
-
-            // Fill buffer
-            while (bufferFilled < needed)
-            {
-                int read = await _stream.ReadAsync(
-                    buf.AsMemory(bufferFilled, buf.Length - bufferFilled),
-                    _cancellationToken);
-                if (read == 0)
-                    break;
-                bufferFilled += read;
-            }
-        }
+        var span = contentBytes.GetBuffer().AsSpan(0, (int)contentBytes.Length);
+        int charCount = decoder.GetCharCount(span, flush: true);
+        return (ulong)charCount;
     }
 
     /// <summary>

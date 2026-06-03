@@ -30,7 +30,7 @@ public class FileViewServiceConcurrentSafetyTests : IDisposable
     private async Task WaitForScanComplete(FileViewService service, int timeoutMs = 10000)
     {
         var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-        while (service.ScanState < ScanState.QuickScanComplete && DateTime.UtcNow < deadline)
+        while (service.ScanState < ScanState.ScanComplete && DateTime.UtcNow < deadline)
         {
             await Task.Delay(10);
         }

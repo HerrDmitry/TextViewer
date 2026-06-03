@@ -8,34 +8,30 @@ using TextViewer.Services;
 namespace TextViewer.Tests.Services;
 
 /// <summary>
-/// Property-based tests for Full_Scan char-length correctness.
-/// Validates: Requirements 3.2, 3.3, 3.4
+/// Feature: unified-scan-pass, Property 2: Char-length correctness
+/// Validates: Requirements 3.1, 3.2
 /// </summary>
-public class FullScanCharLengthPropertyTests
+public class CharLengthCorrectnessPropertyTests
 {
     /// <summary>
-    /// Represents a generated test case for Full_Scan char-length verification.
+    /// Represents a generated test case with lines, BOM presence, and optional invalid bytes.
     /// </summary>
     private sealed record TestCase(string[] Lines, string[] LineEndings, bool HasBom, byte[]? InvalidByteInsertions);
 
     /// <summary>
-    /// Generates random strings with multi-byte chars (UTF-8 encoding), optional BOM,
-    /// and optional invalid byte sequences.
+    /// Generates random strings with multi-byte chars (UTF-8), optional BOM,
+    /// and optional invalid byte sequences for char-length verification.
     /// </summary>
-    private static Arbitrary<TestCase> FullScanTestCases()
+    private static Arbitrary<TestCase> CharLengthTestCases()
     {
         // Character generators for different UTF-8 byte widths
-        var asciiChar = Gen.Choose(0x20, 0x7E).Select(c => (char)c); // printable ASCII (1-byte UTF-8)
-        var accentedChar = Gen.Choose(0x00C0, 0x00FF).Select(c => (char)c); // Latin Extended (2-byte UTF-8)
-        var cjkChar = Gen.Choose(0x4E00, 0x9FFF).Select(c => (char)c); // CJK Unified (3-byte UTF-8)
+        var asciiChar = Gen.Choose(0x20, 0x7E).Select(c => (char)c);
+        var accentedChar = Gen.Choose(0x00C0, 0x00FF).Select(c => (char)c);
+        var cjkChar = Gen.Choose(0x4E00, 0x9FFF).Select(c => (char)c);
 
-        // Emoji/surrogate pairs (4-byte UTF-8) - use specific known emoji code points
+        // Emoji/surrogate pairs (4-byte UTF-8)
         var emojiString = Gen.Elements(
-            "\U0001F600", // 😀
-            "\U0001F4A9", // 💩
-            "\U0001F680", // 🚀
-            "\U0001F30D", // 🌍
-            "\U0001F525"  // 🔥
+            "\U0001F600", "\U0001F4A9", "\U0001F680", "\U0001F30D", "\U0001F525"
         );
 
         // A single "character unit" - either a single char or a surrogate pair string
@@ -60,13 +56,8 @@ public class FullScanCharLengthPropertyTests
         // BOM flag
         var hasBom = Gen.Elements(true, false);
 
-        // Invalid byte sequences (optional)
-        // These are bytes that are invalid in UTF-8
-        var invalidByte = Gen.Elements<byte>(
-            0xFF, 0xFE, // Not valid UTF-8 start bytes
-            0xC0, 0xC1, // Overlong encoding start bytes (invalid)
-            0x80, 0x81, 0xBF // Continuation bytes without start byte
-        );
+        // Invalid byte sequences (optional) - bytes invalid in UTF-8
+        var invalidByte = Gen.Elements<byte>(0xFF, 0xFE, 0xC0, 0xC1, 0x80, 0x81, 0xBF);
 
         var invalidBytes = Gen.OneOf(
             Gen.Constant((byte[]?)null),
@@ -86,32 +77,28 @@ public class FullScanCharLengthPropertyTests
     }
 
     /// <summary>
-    /// Property 2: Full_Scan char-length correctness
+    /// **Validates: Requirements 3.1, 3.2**
     ///
-    /// For any file content and detected encoding, the Char_Length stored for each line
-    /// SHALL equal the .Length of the .NET string produced by decoding that line's content
-    /// bytes (excluding delimiter bytes) with the encoding (using DecoderFallback.ReplacementFallback),
-    /// excluding any BOM character.
-    ///
-    /// Validates: Requirements 3.2, 3.3, 3.4
+    /// For any file content and detected encoding (UTF-8, with and without BOM),
+    /// the Char_Length stored for each line SHALL equal the .Length of the .NET string
+    /// produced by decoding that line's content bytes (excluding delimiter bytes) with the
+    /// encoding using ReplacementFallback, excluding BOM characters on the first line only.
     /// </summary>
     [Property(MaxTest = 10)]
-    public Property FullScan_CharLength_Correctness()
+    public Property CharLength_Correctness()
     {
         return Prop.ForAll(
-            FullScanTestCases(),
+            CharLengthTestCases(),
             (TestCase testCase) =>
             {
                 string tempFile = Path.GetTempFileName();
                 try
                 {
-                    // Build the file bytes
+                    // Build file bytes
                     byte[] fileBytes = BuildFileBytes(testCase);
-
-                    // Write to temp file
                     File.WriteAllBytes(tempFile, fileBytes);
 
-                    // Run full scan (Quick + Full)
+                    // Run unified scan
                     var logger = NullLogger<FileIndex>.Instance;
                     using var fileIndex = new FileIndex(tempFile, CancellationToken.None, logger);
                     fileIndex.StartScanAsync().GetAwaiter().GetResult();
@@ -126,8 +113,8 @@ public class FullScanCharLengthPropertyTests
                     var index = fileIndex.Index;
                     int lineCount = index.LineCount;
 
-                    // Compute expected char lengths
-                    int[] expectedCharLengths = ComputeExpectedCharLengths(testCase, fileBytes);
+                    // Compute expected char lengths independently
+                    int[] expectedCharLengths = ComputeExpectedCharLengths(fileBytes);
 
                     if (lineCount != expectedCharLengths.Length)
                     {
@@ -158,14 +145,14 @@ public class FullScanCharLengthPropertyTests
     }
 
     /// <summary>
-    /// Builds the raw file bytes from the test case, including optional BOM and invalid bytes.
+    /// Builds raw file bytes from the test case, including optional BOM and invalid bytes.
     /// </summary>
     private static byte[] BuildFileBytes(TestCase testCase)
     {
         var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
         using var ms = new MemoryStream();
 
-        // Optional BOM (EF BB BF)
+        // Optional UTF-8 BOM (EF BB BF)
         if (testCase.HasBom)
         {
             ms.Write(new byte[] { 0xEF, 0xBB, 0xBF });
@@ -187,33 +174,21 @@ public class FullScanCharLengthPropertyTests
                 ms.Write(contentBytes);
             }
 
-            // Write line ending (except for the last line which may be unterminated)
-            // We always write a line ending for all lines to keep it simple
-            if (i < testCase.Lines.Length - 1)
-            {
-                byte[] endingBytes = utf8.GetBytes(testCase.LineEndings[i]);
-                ms.Write(endingBytes);
-            }
-            else
-            {
-                // Last line: 50% chance of having a line ending (determined by content)
-                // For simplicity, always add the ending for the last line too
-                byte[] endingBytes = utf8.GetBytes(testCase.LineEndings[i]);
-                ms.Write(endingBytes);
-            }
+            // Write line ending for all lines
+            byte[] endingBytes = utf8.GetBytes(testCase.LineEndings[i]);
+            ms.Write(endingBytes);
         }
 
         return ms.ToArray();
     }
 
     /// <summary>
-    /// Computes the expected char lengths by simulating what the Full_Scan should produce.
-    /// This re-parses the file bytes the same way FileIndex does: identify lines by delimiters,
-    /// strip BOM from first line, decode with ReplacementFallback, and measure .Length.
+    /// Computes expected char lengths by independently parsing file bytes:
+    /// identify lines by delimiters, strip BOM from first line, decode with
+    /// ReplacementFallback, and measure .Length.
     /// </summary>
-    private static int[] ComputeExpectedCharLengths(TestCase testCase, byte[] fileBytes)
+    private static int[] ComputeExpectedCharLengths(byte[] fileBytes)
     {
-        // Parse the file bytes into lines (same logic as Quick_Scan)
         var lineByteRanges = ParseLineByteRanges(fileBytes);
 
         if (lineByteRanges.Count == 0)
@@ -222,11 +197,9 @@ public class FullScanCharLengthPropertyTests
         // Detect BOM
         int bomByteLength = 0;
         if (fileBytes.Length >= 3 && fileBytes[0] == 0xEF && fileBytes[1] == 0xBB && fileBytes[2] == 0xBF)
-        {
             bomByteLength = 3;
-        }
 
-        // Create decoder with replacement fallback
+        // Create decoder encoding with replacement fallback
         Encoding decoderEncoding = Encoding.GetEncoding(
             Encoding.UTF8.CodePage,
             EncoderFallback.ReplacementFallback,
@@ -243,7 +216,7 @@ public class FullScanCharLengthPropertyTests
             int contentStart = start;
             int contentLength = length - delimiterBytes;
 
-            // For first line, exclude BOM
+            // For first line, exclude BOM bytes from content
             if (i == 0 && bomByteLength > 0 && contentLength >= bomByteLength)
             {
                 contentStart += bomByteLength;
@@ -256,7 +229,7 @@ public class FullScanCharLengthPropertyTests
                 continue;
             }
 
-            // Decode and get string length
+            // Decode and get .NET string length
             string decoded = decoderEncoding.GetString(fileBytes, contentStart, contentLength);
             charLengths[i] = decoded.Length;
         }
@@ -265,8 +238,8 @@ public class FullScanCharLengthPropertyTests
     }
 
     /// <summary>
-    /// Parses file bytes into line byte ranges (start, length) using the same
-    /// line-ending detection logic as Quick_Scan.
+    /// Parses file bytes into line byte ranges (start, length) using
+    /// line-ending detection (LF, CR, CRLF).
     /// </summary>
     private static List<(int Start, int Length)> ParseLineByteRanges(byte[] fileBytes)
     {
@@ -282,25 +255,21 @@ public class FullScanCharLengthPropertyTests
 
             if (b == 0x0A)
             {
-                // LF - end of line (includes the LF byte)
                 int lineLength = i - lineStart + 1;
                 ranges.Add((lineStart, lineLength));
                 lineStart = i + 1;
             }
             else if (b == 0x0D)
             {
-                // CR - check if followed by LF (CRLF)
                 if (i + 1 < fileBytes.Length && fileBytes[i + 1] == 0x0A)
                 {
-                    // CRLF
                     int lineLength = i - lineStart + 2;
                     ranges.Add((lineStart, lineLength));
                     lineStart = i + 2;
-                    i++; // skip the LF
+                    i++;
                 }
                 else
                 {
-                    // Standalone CR
                     int lineLength = i - lineStart + 1;
                     ranges.Add((lineStart, lineLength));
                     lineStart = i + 1;
@@ -308,7 +277,7 @@ public class FullScanCharLengthPropertyTests
             }
         }
 
-        // Handle final unterminated line
+        // Final unterminated line
         if (lineStart < fileBytes.Length)
         {
             ranges.Add((lineStart, fileBytes.Length - lineStart));
@@ -318,7 +287,7 @@ public class FullScanCharLengthPropertyTests
     }
 
     /// <summary>
-    /// Determines the number of delimiter bytes at the end of a line's byte range.
+    /// Determines delimiter byte count at end of a line's byte range.
     /// </summary>
     private static int GetDelimiterByteCount(byte[] fileBytes, int start, int length)
     {
@@ -327,15 +296,12 @@ public class FullScanCharLengthPropertyTests
 
         int end = start + length;
 
-        // Check for CRLF
         if (length >= 2 && fileBytes[end - 2] == 0x0D && fileBytes[end - 1] == 0x0A)
             return 2;
 
-        // Check for LF
         if (fileBytes[end - 1] == 0x0A)
             return 1;
 
-        // Check for CR
         if (fileBytes[end - 1] == 0x0D)
             return 1;
 

@@ -18,7 +18,7 @@ public class LineIndexTests
     public void ZeroLineFile_AppendEmpty_NoSegments()
     {
         var index = new LineIndex();
-        index.AppendByteLengths(ReadOnlySpan<ulong>.Empty);
+        index.AppendLinePairs(ReadOnlySpan<LinePair>.Empty);
 
         Assert.Equal(0, index.LineCount);
     }
@@ -29,7 +29,7 @@ public class LineIndexTests
     public void SingleLineFile_OneSegment_OnePair()
     {
         var index = new LineIndex();
-        index.AppendByteLengths(new ulong[] { 42 });
+        index.AppendLinePairs(new LinePair[] { new(42, 40) });
 
         Assert.Equal(1, index.LineCount);
         Assert.Equal(42UL, index.GetByteLength(0));
@@ -42,12 +42,12 @@ public class LineIndexTests
     {
         var dir = new SegmentDirectory();
         // Many lines fit in Byte tier, then one line requires UShort tier.
-        // With enough Byte-tier lines, keeping them in a separate Byte segment
-        // is cheaper than widening them all to UShort.
-        // Separate: 9 + (5×2×1) + 9 + (1×2×2) = 19 + 13 = 32
-        // Merged (UShort): 9 + (6×2×2) = 33
-        // So separate is cheaper when there are enough Byte-tier lines.
-        dir.Append(new ulong[] { 100, 100, 100, 100, 100, 300 }, 0);
+        var pairs = new LinePair[]
+        {
+            new(100, 100), new(100, 100), new(100, 100),
+            new(100, 100), new(100, 100), new(300, 300)
+        };
+        dir.Append(pairs, 0);
 
         var segments = dir.Segments;
         Assert.Equal(2, segments.Count);
@@ -63,14 +63,12 @@ public class LineIndexTests
         var dir = new SegmentDirectory();
         // First line requires UInt tier (value > 65535)
         // Followed by many lines that fit in Byte tier
-        // Memory saved = remainingLines * 2 * (4 - 1) = remainingLines * 6
-        // Need remainingLines * 6 > 9 → remainingLines >= 2
-        var byteLengths = new ulong[12];
-        byteLengths[0] = 70000; // UInt tier
+        var pairs = new LinePair[12];
+        pairs[0] = new LinePair(70000, 70000);
         for (int i = 1; i < 12; i++)
-            byteLengths[i] = 50; // Byte tier
+            pairs[i] = new LinePair(50, 50);
 
-        dir.Append(byteLengths, 0);
+        dir.Append(pairs, 0);
 
         var segments = dir.Segments;
         Assert.True(segments.Count >= 2, "Should split into at least 2 segments");
@@ -88,9 +86,9 @@ public class LineIndexTests
         // Followed by 1 line that fits in Byte tier
         // Memory saved = 1 * 2 * (2 - 1) = 2, which is ≤ 9
         // Should NOT split
-        var byteLengths = new ulong[] { 300, 50 };
+        var pairs = new LinePair[] { new(300, 300), new(50, 50) };
 
-        dir.Append(byteLengths, 0);
+        dir.Append(pairs, 0);
 
         var segments = dir.Segments;
         Assert.Single(segments);
@@ -103,7 +101,7 @@ public class LineIndexTests
     public void SegmentMemory_ByteTier_MatchesFormula()
     {
         var dir = new SegmentDirectory();
-        dir.Append(new ulong[] { 10, 20, 30 }, 0);
+        dir.Append(new LinePair[] { new(10, 5), new(20, 15), new(30, 25) }, 0);
 
         var segment = dir.Segments[0];
         int expectedMetadata = 9; // StartLine(4) + Count(4) + Tier(1)
@@ -120,7 +118,7 @@ public class LineIndexTests
     public void SegmentMemory_UShortTier_MatchesFormula()
     {
         var dir = new SegmentDirectory();
-        dir.Append(new ulong[] { 300, 400, 500 }, 0);
+        dir.Append(new LinePair[] { new(300, 300), new(400, 400), new(500, 500) }, 0);
 
         var segment = dir.Segments[0];
         int expectedDataSize = segment.Count * 2 * (int)segment.Tier;
@@ -133,7 +131,7 @@ public class LineIndexTests
     public void SegmentMemory_UIntTier_MatchesFormula()
     {
         var dir = new SegmentDirectory();
-        dir.Append(new ulong[] { 70000, 80000 }, 0);
+        dir.Append(new LinePair[] { new(70000, 70000), new(80000, 80000) }, 0);
 
         var segment = dir.Segments[0];
         int expectedDataSize = segment.Count * 2 * (int)segment.Tier;
@@ -148,7 +146,7 @@ public class LineIndexTests
     public void GetByteOffset_Zero_ReturnsZero()
     {
         var index = new LineIndex();
-        index.AppendByteLengths(new ulong[] { 10, 20, 30 });
+        index.AppendLinePairs(new LinePair[] { new(10, 8), new(20, 15), new(30, 25) });
 
         Assert.Equal(0UL, index.GetByteOffset(0));
     }
@@ -159,7 +157,7 @@ public class LineIndexTests
     public void GetByteOffset_N_ReturnsSumOfPreviousByteLengths()
     {
         var index = new LineIndex();
-        index.AppendByteLengths(new ulong[] { 10, 20, 30, 40 });
+        index.AppendLinePairs(new LinePair[] { new(10, 8), new(20, 15), new(30, 25), new(40, 35) });
 
         Assert.Equal(0UL, index.GetByteOffset(0));
         Assert.Equal(10UL, index.GetByteOffset(1));
@@ -168,57 +166,34 @@ public class LineIndexTests
         Assert.Equal(100UL, index.GetByteOffset(4)); // 10 + 20 + 30 + 40 (== LineCount)
     }
 
-    // --- GetCharLength returns null before Full_Scan writes ---
+    // --- GetCharLength returns value after AppendLinePairs ---
 
     [Fact]
-    public void GetCharLength_BeforeFullScan_ReturnsNull()
+    public void GetCharLength_AfterAppendLinePairs_ReturnsValue()
     {
         var index = new LineIndex();
-        index.AppendByteLengths(new ulong[] { 10, 20, 30 });
-
-        Assert.Null(index.GetCharLength(0));
-        Assert.Null(index.GetCharLength(1));
-        Assert.Null(index.GetCharLength(2));
-    }
-
-    // --- GetCharLength returns value after SetCharLength ---
-
-    [Fact]
-    public void GetCharLength_AfterSetCharLength_ReturnsValue()
-    {
-        var index = new LineIndex();
-        index.AppendByteLengths(new ulong[] { 10, 20, 30 });
-
-        index.SetCharLength(0, 8);
-        index.SetCharLength(1, 15);
-        index.SetCharLength(2, 25);
+        index.AppendLinePairs(new LinePair[] { new(10, 8), new(20, 15), new(30, 25) });
 
         Assert.Equal(8UL, index.GetCharLength(0));
         Assert.Equal(15UL, index.GetCharLength(1));
         Assert.Equal(25UL, index.GetCharLength(2));
     }
 
-    // --- SetCharLength writes to char slot without affecting byte slot ---
+    // --- AppendLinePairs writes char slot without affecting byte slot ---
 
     [Fact]
-    public void SetCharLength_DoesNotAffectByteSlot()
+    public void AppendLinePairs_ByteAndCharSlotsIndependent()
     {
         var index = new LineIndex();
-        index.AppendByteLengths(new ulong[] { 100, 200 });
+        index.AppendLinePairs(new LinePair[] { new(100, 50), new(200, 150) });
 
-        // Record byte lengths before
-        var byteLenBefore0 = index.GetByteLength(0);
-        var byteLenBefore1 = index.GetByteLength(1);
-
-        // Write char lengths
-        index.SetCharLength(0, 50);
-        index.SetCharLength(1, 150);
-
-        // Byte lengths should be unchanged
-        Assert.Equal(byteLenBefore0, index.GetByteLength(0));
-        Assert.Equal(byteLenBefore1, index.GetByteLength(1));
+        // Byte lengths correct
         Assert.Equal(100UL, index.GetByteLength(0));
         Assert.Equal(200UL, index.GetByteLength(1));
+
+        // Char lengths correct
+        Assert.Equal(50UL, index.GetCharLength(0));
+        Assert.Equal(150UL, index.GetCharLength(1));
     }
 
     // --- Segment stores interleaved pairs (byteLen, charLen) ---
@@ -227,7 +202,7 @@ public class LineIndexTests
     public void Segment_StoresInterleavedPairs()
     {
         var dir = new SegmentDirectory();
-        dir.Append(new ulong[] { 10, 20, 30 }, 0);
+        dir.Append(new LinePair[] { new(10, 5), new(20, 15), new(30, 25) }, 0);
 
         var segment = dir.Segments[0];
 
@@ -236,42 +211,30 @@ public class LineIndexTests
         Assert.Equal(20UL, segment.GetByteLength(1));
         Assert.Equal(30UL, segment.GetByteLength(2));
 
-        // Char lengths initialized to 0
-        Assert.Equal(0UL, segment.GetCharLength(0));
-        Assert.Equal(0UL, segment.GetCharLength(1));
-        Assert.Equal(0UL, segment.GetCharLength(2));
-
-        // Set char lengths and verify interleaving
-        segment.SetCharLength(0, 5);
-        segment.SetCharLength(1, 15);
-        segment.SetCharLength(2, 25);
-
-        // Byte lengths still correct
-        Assert.Equal(10UL, segment.GetByteLength(0));
-        Assert.Equal(20UL, segment.GetByteLength(1));
-        Assert.Equal(30UL, segment.GetByteLength(2));
-
-        // Char lengths now set
+        // Char lengths stored correctly
         Assert.Equal(5UL, segment.GetCharLength(0));
         Assert.Equal(15UL, segment.GetCharLength(1));
         Assert.Equal(25UL, segment.GetCharLength(2));
     }
 
-    // --- Additional edge case: GetCharLength partial writes ---
+    // --- MaxCharLength is non-nullable ulong after AppendLinePairs ---
 
     [Fact]
-    public void GetCharLength_PartialWrites_NullForUnwrittenLines()
+    public void MaxCharLength_NonNullable_ReturnsMaxValue()
     {
         var index = new LineIndex();
-        index.AppendByteLengths(new ulong[] { 10, 20, 30 });
+        index.AppendLinePairs(new LinePair[] { new(10, 8), new(20, 15), new(30, 25) });
 
-        // Write char length only for line 0
-        index.SetCharLength(0, 8);
+        // MaxCharLength is ulong (non-nullable), returns max of char lengths
+        Assert.Equal(25UL, index.MaxCharLength);
+    }
 
-        // Line 0 has char length
-        Assert.Equal(8UL, index.GetCharLength(0));
-        // Lines 1 and 2 still null (not yet written by Full_Scan)
-        Assert.Null(index.GetCharLength(1));
-        Assert.Null(index.GetCharLength(2));
+    [Fact]
+    public void MaxCharLength_ZeroWhenNoLinesAppended()
+    {
+        var index = new LineIndex();
+
+        // No lines appended → MaxCharLength is 0 (non-nullable ulong)
+        Assert.Equal(0UL, index.MaxCharLength);
     }
 }

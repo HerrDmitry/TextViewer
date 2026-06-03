@@ -45,12 +45,12 @@ public class FileViewServiceConcurrentAccessTests : IDisposable
 
         // Wait for scan to complete
         var timeout = DateTime.UtcNow.AddSeconds(10);
-        while (service.ScanState < ScanState.QuickScanComplete && DateTime.UtcNow < timeout)
+        while (service.ScanState < ScanState.ScanComplete && DateTime.UtcNow < timeout)
         {
             await Task.Delay(10);
         }
 
-        Assert.True(service.ScanState >= ScanState.QuickScanComplete,
+        Assert.True(service.ScanState >= ScanState.ScanComplete,
             "Scan did not complete in time");
 
         // Act — issue 4 concurrent requests with different startLine values

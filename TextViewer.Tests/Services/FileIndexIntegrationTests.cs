@@ -41,7 +41,7 @@ public class FileIndexIntegrationTests
             using var fileIndex = new FileIndex(tempFile, cts.Token, _logger);
             await fileIndex.StartScanAsync();
 
-            Assert.Equal(ScanState.FullScanComplete, fileIndex.State);
+            Assert.Equal(ScanState.ScanComplete, fileIndex.State);
             Assert.Equal(lines.Length, fileIndex.Index.LineCount);
 
             // Verify each line's byte length and char length
@@ -86,7 +86,7 @@ public class FileIndexIntegrationTests
             using var fileIndex = new FileIndex(tempFile, cts.Token, _logger);
             await fileIndex.StartScanAsync();
 
-            Assert.Equal(ScanState.FullScanComplete, fileIndex.State);
+            Assert.Equal(ScanState.ScanComplete, fileIndex.State);
             Assert.Equal(lines.Length, fileIndex.Index.LineCount);
 
             // Verify GetByteOffset(0) == 0
@@ -184,7 +184,7 @@ public class FileIndexIntegrationTests
                             }
                         }
 
-                        if (state == ScanState.FullScanComplete)
+                        if (state == ScanState.ScanComplete)
                             break;
 
                         Thread.Sleep(1); // Small delay to avoid tight spin
@@ -205,7 +205,7 @@ public class FileIndexIntegrationTests
             fileIndex.Dispose();
 
             Assert.Empty(exceptions);
-            Assert.Equal(ScanState.FullScanComplete, fileIndex.State);
+            Assert.Equal(ScanState.ScanComplete, fileIndex.State);
         }
         finally
         {
@@ -244,7 +244,7 @@ public class FileIndexIntegrationTests
             await scanTask;
             cancelTime.Stop();
 
-            // State should be Cancelled (or FullScanComplete if it finished before cancel)
+            // State should be Cancelled (or ScanComplete if it finished before cancel)
             if (fileIndex.State == ScanState.Cancelled)
             {
                 // Verify cancellation happened within generous timeout (2000ms for CI)
@@ -259,17 +259,17 @@ public class FileIndexIntegrationTests
         }
     }
 
-    // --- Test 5: Cancellation during Full_Scan stops within 2000ms ---
+    // --- Test 5: Cancellation during scan stops within 2000ms ---
 
     [Fact]
-    public async Task Cancellation_DuringFullScan_StopsWithinTimeout()
+    public async Task Cancellation_DuringScan_StopsWithinTimeout()
     {
-        // Create a large file so Full_Scan takes time
+        // Create a large file so scan takes time
         var tempFile = Path.GetTempFileName();
         try
         {
             var sb = new StringBuilder();
-            // Many lines with multi-byte content to slow down Full_Scan
+            // Many lines with multi-byte content to slow down scan
             for (int i = 0; i < 50000; i++)
             {
                 sb.AppendLine($"Line {i:D5} café résumé naïve 日本語テスト");
@@ -282,16 +282,16 @@ public class FileIndexIntegrationTests
             // Start scan in a background thread so we can observe state transitions
             var scanTask = Task.Run(() => fileIndex.StartScanAsync());
 
-            // Wait for Full_Scan to start before cancelling
+            // Wait for scan to start before cancelling
             var sw = Stopwatch.StartNew();
             while (sw.Elapsed < TimeSpan.FromSeconds(10))
             {
                 var state = fileIndex.State;
-                if (state == ScanState.FullScanInProgress)
+                if (state == ScanState.ScanInProgress)
                 {
                     break;
                 }
-                if (state == ScanState.FullScanComplete ||
+                if (state == ScanState.ScanComplete ||
                     state == ScanState.Failed ||
                     state == ScanState.Cancelled)
                 {
@@ -300,18 +300,18 @@ public class FileIndexIntegrationTests
                 await Task.Delay(1);
             }
 
-            // Cancel during Full_Scan
+            // Cancel during scan
             var cancelTime = Stopwatch.StartNew();
             cts.Cancel();
 
             await scanTask;
             cancelTime.Stop();
 
-            // State should be Cancelled (or FullScanComplete if it finished before cancel)
+            // State should be Cancelled (or ScanComplete if it finished before cancel)
             if (fileIndex.State == ScanState.Cancelled)
             {
                 Assert.True(cancelTime.ElapsedMilliseconds < 5000,
-                    $"Full_Scan cancellation took {cancelTime.ElapsedMilliseconds}ms, expected < 5000ms");
+                    $"Scan cancellation took {cancelTime.ElapsedMilliseconds}ms, expected < 5000ms");
             }
         }
         finally
@@ -340,7 +340,7 @@ public class FileIndexIntegrationTests
             using var fileIndex = new FileIndex(tempFile, cts.Token, _logger);
             await fileIndex.StartScanAsync();
 
-            Assert.Equal(ScanState.FullScanComplete, fileIndex.State);
+            Assert.Equal(ScanState.ScanComplete, fileIndex.State);
             Assert.Null(fileIndex.Error);
             Assert.Equal(lineCount, fileIndex.Index.LineCount);
 
@@ -395,7 +395,7 @@ public class FileIndexIntegrationTests
 
             // Verify no IOException occurred when opening the file concurrently
             Assert.Null(sharingException);
-            Assert.Equal(ScanState.FullScanComplete, fileIndex.State);
+            Assert.Equal(ScanState.ScanComplete, fileIndex.State);
         }
         finally
         {

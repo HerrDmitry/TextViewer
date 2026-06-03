@@ -150,7 +150,7 @@ describe('ShellStateService scroll navigation', () => {
     service.viewDimensions.set({ rowCount: 40, colCount: 120 });
 
     // Set scrollbar state to scrollable (verticalMax > rowCount, horizontalMax > colCount)
-    simulateScrollInfoResponse('FullScanComplete\n1000\n256\n200');
+    simulateScrollInfoResponse('ScanComplete\n1000\n256\n200');
 
     return viewSessionId;
   }
