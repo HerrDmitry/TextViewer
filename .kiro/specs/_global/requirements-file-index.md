@@ -139,7 +139,20 @@ File Index feature. When a user selects a file via the Open File Dialog, the app
 3. `GetByteOffset` for large indices SHALL use segment-indexed prefix metadata, not full per-line accumulation from line 0
 4. Nearby offset queries SHALL reuse segment-locality information
 
-### Requirement 12: Resource Disposal
+### Requirement 12: Scan Progress Tracking
+
+**User Story:** As a developer, I want FileIndex to expose bytes-read progress during scan, so that the UI can display a progress bar.
+
+#### Acceptance Criteria
+
+1. WHILE a scan is in progress, THE FileIndex SHALL track the number of bytes read from the file stream, where bytes_read is incremented by the count returned from each ReadAsync call
+2. THE FileIndex SHALL expose `TotalFileSize` (set from stream length before the scan loop begins) and `BytesRead` (current bytes read) as properties
+3. THE `BytesRead` property SHALL be safe to read from any thread at any time without synchronization by using a volatile or interlocked mechanism, ensuring concurrent reads never observe a torn value
+4. WHEN `StartScanAsync` completes successfully, `BytesRead` SHALL equal `TotalFileSize`
+
+### Requirement 13: Resource Disposal
+
+### Requirement 13: Resource Disposal
 
 **User Story:** As a developer, I want FileIndex to cleanly release resources when disposed.
 
@@ -149,3 +162,5 @@ File Index feature. When a user selects a file via the Open File Dialog, the app
 2. WHEN Dispose is called, THE FileIndex SHALL release file stream and clear LineIndex memory, continuing to release remaining resources after failures
 3. IF disposal fails for a resource, THE FileIndex SHALL log at Warning level and continue
 4. Double Dispose SHALL complete without throwing
+
+**User Story:** As a developer, I want FileIndex to cleanly release resources when disposed.

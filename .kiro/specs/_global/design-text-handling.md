@@ -184,6 +184,7 @@ export interface TabViewState {
   pendingCorrelationId: string | null;
   deferred: boolean;
   scrollbarState: ScrollbarState;
+  scanProgress: number;  // 0–100, from get-scroll-info 5th field
 }
 ```
 
@@ -394,6 +395,7 @@ const newTabViewState: TabViewState = {
   pendingCorrelationId: null,
   deferred: false,
   scrollbarState: { verticalMax: 0, horizontalMax: 0, disabled: true },
+  scanProgress: 0,
 };
 ```
 
@@ -441,7 +443,7 @@ private handleScrollInfoResponse(msg: InboundMessage): void {
   const payload = msg.payload;
   if (payload.startsWith('ERROR:')) return;
   const fields = payload.split('\n');
-  if (fields.length !== 4) return;
+  if (fields.length < 4 || fields.length > 5) return;
 
   const scanState = fields[0] as ScanStateValue;
   const lineCount = parseInt(fields[1], 10);
@@ -456,6 +458,15 @@ private handleScrollInfoResponse(msg: InboundMessage): void {
   const sessionId = this.scrollPollSessionId;
   if (!sessionId) return;
   this.updateTabScrollbar(sessionId, { verticalMax, horizontalMax, disabled });
+
+  // Parse 5th field as scan progress when present and scan is in progress
+  if (fields.length === 5 && scanState === 'ScanInProgress') {
+    const progress = parseInt(fields[4], 10);
+    if (!isNaN(progress)) {
+      // Store scanProgress in TabViewState for progress bar display
+      this.updateTabScanProgress(sessionId, progress);
+    }
+  }
 
   if (['ScanComplete', 'Failed', 'Cancelled'].includes(scanState)) {
     this.stopScrollPolling();
@@ -651,8 +662,15 @@ messageBus.RegisterHandler("get-scroll-info", (correlationId, payload) =>
     ulong maxByteLength = lineIndex.MaxByteLength;
     ulong maxCharLength = lineIndex.MaxCharLength;
 
+    // Progress percentage: 100 when terminal/zero-size, else floor(bytesRead*100/totalFileSize)
+    int progressPercentage;
+    if (scanState >= ScanState.ScanComplete || service.TotalFileSize == 0)
+        progressPercentage = 100;
+    else
+        progressPercentage = (int)(service.BytesRead * 100 / service.TotalFileSize);
+
     return Task.FromResult<string?>(
-        $"{scanState}\n{lineCount}\n{maxByteLength}\n{maxCharLength}");
+        $"{scanState}\n{lineCount}\n{maxByteLength}\n{maxCharLength}\n{progressPercentage}");
 });
 ```
 
@@ -712,7 +730,7 @@ Single field: `{View_Session_ID}` (no newlines).
 
 **Success:**
 ```
-{scanState}\n{lineCount}\n{maxByteLength}\n{maxCharLength}
+{scanState}\n{lineCount}\n{maxByteLength}\n{maxCharLength}\n{progressPercentage}
 ```
 
 | Field | Position | Type | Description |
@@ -721,6 +739,7 @@ Single field: `{View_Session_ID}` (no newlines).
 | lineCount | 1 | int | Total lines discovered so far |
 | maxByteLength | 2 | ulong | Max byte_length across all discovered lines |
 | maxCharLength | 3 | ulong | Max char_length across all discovered lines |
+| progressPercentage | 4 | int | Scan progress: floor(bytesRead*100/totalFileSize); 100 when terminal or file size is 0 |
 
 **Error:** `ERROR:Session not found: {viewSessionId}`
 
@@ -846,9 +865,9 @@ computeCharMetrics():
 
 ### Property 12: Get-scroll-info response round-trip
 
-*For any* valid ScanState name string, lineCount ≥ 0, maxByteLength ≥ 0, and maxCharLength ≥ 0, encoding them as `scanState\nlineCount\nmaxByteLength\nmaxCharLength` and then parsing that string SHALL recover the original values exactly.
+*For any* valid ScanState name string, lineCount ≥ 0, maxByteLength ≥ 0, maxCharLength ≥ 0, and progressPercentage 0–100, encoding them as `scanState\nlineCount\nmaxByteLength\nmaxCharLength\nprogressPercentage` and then parsing that string SHALL recover the original values exactly.
 
-**Validates: Requirements 9.1, 10.1, 11.1**
+**Validates: Requirements 9.1, 10.1, 11.1, 11.7**
 
 ## Error Handling
 

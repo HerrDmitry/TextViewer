@@ -86,7 +86,7 @@ Viewer UI Shell feature. Defines the top-level layout of the Angular frontend: a
 
 ### Requirement 6: Status Bar Display
 
-**User Story:** As a user, I want to see the full path of the currently active file in the status bar, so that I know exactly which file I am viewing.
+**User Story:** As a user, I want to see the full path of the currently active file in the status bar plus scan progress feedback, so that I know which file I am viewing and how far along the scan is.
 
 #### Acceptance Criteria
 
@@ -94,6 +94,9 @@ Viewer UI Shell feature. Defines the top-level layout of the Angular frontend: a
 2. WHEN no tabs are open, THE Status_Bar SHALL display empty text (no file path)
 3. WHEN the Active_Tab changes (via tab click or tab close fallback), THE Status_Bar SHALL update immediately to reflect the new Active_Tab file path
 4. WHILE tabs exist in Tab_Container, THE UI_Shell SHALL ensure exactly one tab is the Active_Tab at all times
+5. WHILE the active tab scan state is ScanInProgress, THE Status_Bar SHALL display a Progress_Bar element positioned between the file path element and the wrap checkbox, occupying all remaining horizontal flex space
+6. WHEN the active tab scan state transitions to a terminal state (ScanComplete, Failed, Cancelled) or no tab is active, THE Status_Bar SHALL hide the Progress_Bar
+7. THE Progress_Bar fill width SHALL equal the scan progress percentage (0–100) as reported by the backend get-scroll-info response
 
 ### Requirement 7: Open File Dialog Integration
 

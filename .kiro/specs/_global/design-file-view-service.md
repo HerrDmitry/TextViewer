@@ -51,6 +51,8 @@ classDiagram
         -CancellationToken _cancellationToken
         -ILogger~FileViewService~ _logger
         +ScanState ScanState
+        +long BytesRead
+        +long TotalFileSize
         +GetViewAsync(int startLine, int startCol, int rowCount, int colCount, CancellationToken ct) Task~Result~ViewResult, ViewError~~
         +Dispose()
     }

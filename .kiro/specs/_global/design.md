@@ -20,6 +20,7 @@ This document captures the full product design for all shipped features. Archite
 - Scroll Navigation → `design-scroll-navigation.md`
 - Line Wrap & Line Numbers → `design-line-wrap-numbers.md`
 - Wrapped Line Count & Visual Row Resolution → `design-wrapped-line-count.md`
+- Scan Progress Bar → `scan-progress-bar/design.md` (feature spec; progress tracking in FileIndex + 5th field in get-scroll-info + StatusBar progress bar)
 
 ## Architecture
 
@@ -71,6 +72,7 @@ Entry point — configures and launches Photino.Blazor app, sets up Message Bus.
 - Manage FileViewService session map (Dictionary<string, FileViewService>)
 - Manage wrapped line count cache (Dictionary<string, (int, int, long)>)
 - Monitor scan state and push "scan-complete" notifications
+- Compute scan progress percentage from FileViewService.BytesRead/TotalFileSize in get-scroll-info handler
 - Start application event loop
 
 **Interface:**
@@ -133,7 +135,7 @@ Full component hierarchy, state management, templates, and CSS in `design-viewer
 - **MenuBarComponent** — File menu (Open..., Exit), synchronous DOM collapse before dialog
 - **TabContainerComponent** — tab headers, close buttons, position-aware
 - **TextViewAreaComponent** — empty state prompt, view row rendering, measurement pipeline, scrollbar display
-- **StatusBarComponent** — active file path display
+- **StatusBarComponent** — active file path display, scan progress bar (visible during ScanInProgress), wrap checkbox
 
 ### 4. Project File (`TextViewer.csproj`)
 
@@ -222,6 +224,7 @@ Properties defined per feature in their respective design docs:
 - **Scroll Navigation**: 5 properties (scroll step clamping, drag position clamping, non-interactive guard, thumb position fraction, thumb size ratio) — see `design-scroll-navigation.md`
 - **Line Wrap & Line Numbers**: 10 properties (backend-provided line numbers, preservation, gutter width, splitIntoVisualRows, scroll position, content-count invariant, param validation, payload round-trip, scrollbar max, col-count with gutter) — see `design-line-wrap-numbers.md`
 - **Wrapped Line Count**: 5 properties (computation correctness, visual row index round-trip, cache key correctness, char-length fallback, response parsing) — see `design-wrapped-line-count.md`
+- **Scan Progress Bar**: 5 properties (visibility signal, fill width, scroll-info parsing, progress computation, bytes-read invariant) — see `scan-progress-bar/design.md`
 
 ## Testing Strategy
 

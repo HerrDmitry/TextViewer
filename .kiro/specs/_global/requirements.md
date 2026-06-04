@@ -32,6 +32,8 @@ TextViewer is a cross-platform desktop application for viewing text content. Thi
 - **Wrap_Mode**: Display mode where long lines hard-wrap at Col_Count boundary (see `requirements-line-wrap-numbers.md`)
 - **Visual_Row**: Single rendered row; in wrapped mode a Logical_Line may produce multiple (see `requirements-line-wrap-numbers.md`)
 - **Visual_Row_Index**: Zero-based index into flattened sequence of all visual rows; used for scroll position and backend resolution (see `requirements-wrapped-line-count.md`)
+- **Progress_Bar**: Horizontal fill bar in the Status_Bar showing scan completion percentage between file name and wrap checkbox
+- **Scan_Progress**: Percentage of file bytes scanned (0–100), derived from bytes-read / file-size during scanning
 
 ## Requirements
 
@@ -171,3 +173,17 @@ Full spec in `requirements-wrapped-line-count.md`. Summary:
 4. THE backend SHALL resolve visual row indices to (startLine, characterOffset) for scroll navigation
 5. THE frontend SHALL request `get-wrapped-line-count` on wrap toggle, scan complete, resize, and tab activation
 6. THE `get-line-lengths` handler and frontend `lineLengths` infrastructure SHALL be removed entirely
+
+### Requirement 11: Scan Progress Bar
+
+**User Story:** As a user, I want a progress bar in the status bar during file scanning, so that I can see how far along the scan is.
+
+#### Acceptance Criteria
+
+Full spec in feature spec `scan-progress-bar/requirements.md`. Summary:
+
+1. WHILE the active tab scan state is ScanInProgress, THE Status_Bar SHALL display a Progress_Bar between file path and wrap checkbox
+2. THE Progress_Bar fill width SHALL equal the scan progress percentage (0–100) as reported by the backend
+3. THE backend SHALL compute progress as floor(bytesRead * 100 / totalFileSize), reporting 100 for terminal states or zero-size files
+4. THE backend SHALL append progress percentage as a 5th field in get-scroll-info responses
+5. WHEN scan state is terminal or no tab is active, THE Status_Bar SHALL hide the Progress_Bar
