@@ -97,6 +97,7 @@ The flow has two phases: (1) an initial view delivered proactively by the backen
 4. IF an error View_Response is received correlated to the active tab's pending View_Request, THEN THE Text_View_Area component SHALL display the error description (payload after the "ERROR:" prefix) in place of file content for the active tab, rendered in a visually distinct manner from normal file content
 5. WHEN the active tab changes to a tab that already has loaded view rows, THE Text_View_Area component SHALL display that tab's cached view rows synchronously (within the same change detection cycle, without sending a new View_Request or awaiting any asynchronous operation); IF the cached rows reference is present but contains no actual row data, THEN THE component SHALL fall back to displaying an empty content region (no empty-state prompt) rather than rendering an empty or invalid view
 6. WHILE a View_Request is pending for the active tab and no previously cached view rows exist for that tab, THE Text_View_Area component SHALL display no file content (empty content region, no empty-state prompt)
+7. WHEN a row string is empty (zero-length string, representing a line whose content length is less than the horizontal scroll offset startCol), THE Text_View_Area component SHALL render that row element with the same vertical height as any non-empty row (one line-height unit), ensuring no visual collapse or line squishing occurs
 
 ### Requirement 6: View Request Payload Format
 
