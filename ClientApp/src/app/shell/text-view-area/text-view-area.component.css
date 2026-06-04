@@ -29,6 +29,7 @@
   font-size: 14px;
   white-space: pre;
   line-height: normal;
+  min-height: 1lh;
 }
 
 .line-number-gutter {
