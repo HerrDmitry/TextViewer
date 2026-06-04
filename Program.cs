@@ -292,8 +292,14 @@ public class Program
         ulong maxByteLength = lineIndex.MaxByteLength;
         ulong maxCharLength = lineIndex.MaxCharLength;
 
-        // Response: scanState\nlineCount\nmaxByteLength\nmaxCharLength
-        return $"{scanState}\n{lineCount}\n{maxByteLength}\n{maxCharLength}";
+        // Progress percentage computation
+        int progressPercentage;
+        if (scanState >= ScanState.ScanComplete || service.TotalFileSize == 0)
+            progressPercentage = 100;
+        else
+            progressPercentage = (int)(service.BytesRead * 100 / service.TotalFileSize);
+
+        return $"{scanState}\n{lineCount}\n{maxByteLength}\n{maxCharLength}\n{progressPercentage}";
     }
 
 

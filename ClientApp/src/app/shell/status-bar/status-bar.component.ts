@@ -11,6 +11,8 @@ export class StatusBarComponent {
   private readonly state = inject(ShellStateService);
   readonly filePath = this.state.activeFilePath;
   readonly wrapMode = this.state.wrapMode;
+  readonly isScanning = this.state.isScanning;
+  readonly activeScanProgress = this.state.activeScanProgress;
 
   onWrapToggle(): void {
     this.state.toggleWrapMode();

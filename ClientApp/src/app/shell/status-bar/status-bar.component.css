@@ -28,3 +28,20 @@
 .wrap-checkbox input[type="checkbox"] {
   cursor: pointer;
 }
+
+.progress-bar {
+  flex-grow: 1;
+  flex-shrink: 1;
+  min-width: 0;
+  height: 4px;
+  background: #e0e0e0;
+  border-radius: 2px;
+  margin: 0 8px;
+}
+
+.progress-fill {
+  height: 100%;
+  background: #4a90d9;
+  border-radius: 2px;
+  transition: width 200ms ease;
+}

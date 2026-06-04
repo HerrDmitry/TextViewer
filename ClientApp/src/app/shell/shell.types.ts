@@ -37,6 +37,8 @@ export interface TabViewState {
   needsRefresh: boolean;
   /** Backend-provided line numbers per visual row (parallel to viewRows); null until first response */
   gutterNumbers: (number | null)[] | null;
+  /** Scan progress percentage (0–100) from last get-scroll-info poll */
+  scanProgress: number;
 }
 
 /** Transient state during scrollbar thumb drag */
