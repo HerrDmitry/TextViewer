@@ -349,6 +349,20 @@ Each scrollbar consists of:
 
 Layout: `.view-content` has right/bottom margins (14px each) to avoid overlapping scrollbar tracks. 14×14 corner gap where vertical and horizontal scrollbars meet.
 
+### View Row CSS
+
+`.view-row` uses `white-space: pre` for verbatim content display with monospace font. `min-height: 1lh` ensures rows with empty content (lines scrolled past horizontally where `startCol >= line.length`) still occupy one line-height of vertical space — prevents visual collapse of short lines.
+
+```css
+.view-row {
+  font-family: monospace;
+  font-size: 14px;
+  white-space: pre;
+  line-height: normal;
+  min-height: 1lh;
+}
+```
+
 ### Frontend Open-File Response Parsing (ShellStateService)
 
 ```typescript
