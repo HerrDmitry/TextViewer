@@ -119,6 +119,25 @@ export class ShellStateService implements OnDestroy {
     return state.gutterNumbers ?? [];
   });
 
+  readonly activeScanState = computed<ScanStateValue>(() => {
+    const tab = this.activeTab();
+    if (!tab) return 'NotStarted';
+    const state = this.tabViewStates().get(tab.viewSessionId);
+    if (!state) return 'NotStarted';
+    return state.scanComplete ? 'ScanComplete' : 'ScanInProgress';
+  });
+
+  readonly activeScanProgress = computed<number>(() => {
+    const tab = this.activeTab();
+    if (!tab) return 0;
+    const state = this.tabViewStates().get(tab.viewSessionId);
+    return state?.scanProgress ?? 0;
+  });
+
+  readonly isScanning = computed<boolean>(() => {
+    return this.activeScanState() === 'ScanInProgress';
+  });
+
   readonly verticalThumbRatio = computed(() => {
     const sb = this.activeScrollbarState();
     const dims = this.viewDimensions();
@@ -249,6 +268,7 @@ export class ShellStateService implements OnDestroy {
         characterOffset: 0,
         needsRefresh: false,
         gutterNumbers: null,
+        scanProgress: 0,
       });
       this.tabViewStates.set(updatedStates);
 
@@ -511,6 +531,7 @@ export class ShellStateService implements OnDestroy {
         characterOffset: 0,
         needsRefresh: false,
         gutterNumbers: null,
+        scanProgress: 0,
       });
       this.tabViewStates.set(updated);
     }
@@ -689,9 +710,9 @@ export class ShellStateService implements OnDestroy {
     const payload = msg.payload;
     if (payload.startsWith('ERROR:')) return;
 
-    // Parse: scanState\nlineCount\nmaxByteLength\nmaxCharLength
+    // Parse: scanState\nlineCount\nmaxByteLength\nmaxCharLength[\nprogressPercentage]
     const fields = payload.split('\n');
-    if (fields.length !== 4) return;
+    if (fields.length < 4 || fields.length > 5) return;
 
     const scanState = fields[0] as ScanStateValue;
     const lineCount = parseInt(fields[1], 10);
@@ -708,6 +729,20 @@ export class ShellStateService implements OnDestroy {
     if (!sessionId) return;
 
     this.updateTabScrollbar(sessionId, { verticalMax, horizontalMax, disabled });
+
+    // Parse 5th field as scan progress when present and scan is in progress
+    if (fields.length === 5 && scanState === 'ScanInProgress') {
+      const progress = parseInt(fields[4], 10);
+      if (!isNaN(progress)) {
+        const currentStates = this.tabViewStates();
+        const existing = currentStates.get(sessionId);
+        if (existing) {
+          const updated = new Map(currentStates);
+          updated.set(sessionId, { ...existing, scanProgress: progress });
+          this.tabViewStates.set(updated);
+        }
+      }
+    }
 
     // Stop polling if scan reached terminal state
     if (scanState === 'ScanComplete'

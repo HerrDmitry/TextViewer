@@ -311,6 +311,13 @@ export class TextViewAreaComponent {
 export class StatusBarComponent {
   private readonly state = inject(ShellStateService);
   readonly filePath = this.state.activeFilePath;
+  readonly wrapMode = this.state.wrapMode;
+  readonly isScanning = this.state.isScanning;
+  readonly activeScanProgress = this.state.activeScanProgress;
+
+  onWrapToggle(): void {
+    this.state.toggleWrapMode();
+  }
 }
 ```
 
@@ -318,8 +325,41 @@ export class StatusBarComponent {
 ```html
 <div class="status-bar">
   <span class="file-path">{{ filePath() }}</span>
+  @if (isScanning()) {
+    <div class="progress-bar">
+      <div class="progress-fill" [style.width.%]="activeScanProgress()"></div>
+    </div>
+  }
+  <label class="wrap-checkbox">
+    <input type="checkbox" [checked]="wrapMode()" (change)="onWrapToggle()" />
+    Wrap
+  </label>
 </div>
 ```
+
+**Styles** (`status-bar.component.css`):
+```css
+.progress-bar {
+  flex-grow: 1;
+  flex-shrink: 1;
+  min-width: 0;
+  height: 4px;
+  background: #e0e0e0;
+  border-radius: 2px;
+  margin: 0 8px;
+}
+
+.progress-fill {
+  height: 100%;
+  background: #4a90d9;
+  border-radius: 2px;
+  transition: width 200ms ease;
+}
+```
+
+**Signals from ShellStateService:**
+- `isScanning` — computed: `activeScanState() === 'ScanInProgress'`
+- `activeScanProgress` — computed: active tab's `tabViewState.scanProgress` (0 if no active tab)
 
 ## Data Models
 

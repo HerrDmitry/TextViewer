@@ -16,6 +16,7 @@ public sealed class FileIndex : IDisposable
     private FileStream? _stream;
     private volatile ScanState _state = ScanState.NotStarted;
     private volatile string? _error;
+    private long _bytesRead;
 
     public FileIndex(string filePath, CancellationToken cancellationToken, ILogger<FileIndex> logger)
     {
@@ -33,6 +34,12 @@ public sealed class FileIndex : IDisposable
 
     /// <summary>Thread-safe line index (readable after ScanComplete).</summary>
     public LineIndex Index { get; }
+
+    /// <summary>Total file size in bytes (set before scan loop starts).</summary>
+    public long TotalFileSize { get; private set; }
+
+    /// <summary>Thread-safe bytes read so far during scan.</summary>
+    public long BytesRead => Volatile.Read(ref _bytesRead);
 
     /// <summary>Detected file encoding (set during scan, defaults to UTF-8 when no BOM present).</summary>
     public Encoding Encoding { get; private set; } = Encoding.UTF8;
@@ -152,7 +159,8 @@ public sealed class FileIndex : IDisposable
 
         // Step 3: Seek to start (BOM bytes included in first line's byte length,
         // but excluded from char count)
-        _stream!.Seek(0, SeekOrigin.Begin);
+        TotalFileSize = _stream!.Length;
+        _stream.Seek(0, SeekOrigin.Begin);
 
         // Step 4: Sequential read loop
         const int BufferSize = 65536; // 64KB
@@ -170,6 +178,8 @@ public sealed class FileIndex : IDisposable
         int bytesRead;
         while ((bytesRead = await _stream.ReadAsync(buffer.AsMemory(0, BufferSize), _cancellationToken)) > 0)
         {
+            Volatile.Write(ref _bytesRead, Volatile.Read(ref _bytesRead) + bytesRead);
+
             for (int i = 0; i < bytesRead; i++)
             {
                 byte b = buffer[i];

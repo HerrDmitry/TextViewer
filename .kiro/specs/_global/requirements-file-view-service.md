@@ -45,8 +45,9 @@ File View Service feature. Provides a backend service that produces a rectangula
 2. THE File_View_Service SHALL initiate the FileIndex scan (StartScanAsync) upon construction or via an explicit initialization method
 3. THE File_View_Service SHALL accept View_Requests at any time after scan has started (including during ScanInProgress); lines within already-scanned range served from available data; lines beyond scanned range return empty strings
 4. THE File_View_Service SHALL expose a `ScanState` property reusing the existing `ScanState` enum from FileIndex (NotStarted, ScanInProgress, ScanComplete, Failed, Cancelled), so callers can distinguish "not yet scanned" empty rows from "past EOF" short results
-5. THE File_View_Service SHALL dispose of its FileIndex when itself disposed
-6. WHEN CancellationToken is cancelled, THE File_View_Service SHALL stop any in-progress view extraction and the underlying FileIndex scan SHALL also cancel gracefully
+5. THE File_View_Service SHALL expose `BytesRead` and `TotalFileSize` pass-through properties from its FileIndex, enabling callers to compute scan progress percentage
+6. THE File_View_Service SHALL dispose of its FileIndex when itself disposed
+7. WHEN CancellationToken is cancelled, THE File_View_Service SHALL stop any in-progress view extraction and the underlying FileIndex scan SHALL also cancel gracefully
 
 ### Requirement 3: Input Validation
 

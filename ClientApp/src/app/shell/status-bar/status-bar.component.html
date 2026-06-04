@@ -1,5 +1,10 @@
 <div class="status-bar">
   <span class="file-path">{{ filePath() }}</span>
+  @if (isScanning()) {
+    <div class="progress-bar">
+      <div class="progress-fill" [style.width.%]="activeScanProgress()"></div>
+    </div>
+  }
   <label class="wrap-checkbox">
     <input type="checkbox" [checked]="wrapMode()" (change)="onWrapToggle()" />
     Wrap

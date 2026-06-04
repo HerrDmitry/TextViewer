@@ -66,6 +66,8 @@ classDiagram
         +LineIndex Index
         +Encoding Encoding
         +int BomByteLength
+        +long TotalFileSize
+        +long BytesRead
         +StartScanAsync() Task~Result~ScanSummary,ScanError~~
         +Dispose()
     }
@@ -114,6 +116,8 @@ public sealed class FileIndex : IDisposable
     public LineIndex Index { get; }
     public Encoding Encoding { get; private set; } = Encoding.UTF8;
     public int BomByteLength { get; private set; } = 0;
+    public long TotalFileSize { get; private set; }              // set from stream.Length before scan loop
+    public long BytesRead => Volatile.Read(ref _bytesRead);     // thread-safe progress
 
     public Task<Result<ScanSummary, ScanError>> StartScanAsync();
     public void Dispose();
@@ -247,13 +251,15 @@ Full `Optimize()` exists for offline/test use (merge+split until optimal).
 ```
 1. DetectBOM (read up to 4 bytes → set Encoding + BomByteLength)
 2. Create Decoder with ReplacementFallback
-3. Seek to byte 0 (BOM bytes included in first line's byteLength, excluded from charLength)
-4. Sequential read loop (64KB buffer):
+3. Set TotalFileSize = stream.Length
+4. Seek to byte 0 (BOM bytes included in first line's byteLength, excluded from charLength)
+5. Sequential read loop (64KB buffer):
+   - ReadAsync → increment _bytesRead by return value (Volatile.Write)
    - Detect line endings (LF/CR/CRLF)
    - Accumulate content bytes per line (excluding delimiters, excluding BOM on first line)
    - On line boundary: compute byteLength (content + delimiter), decode content → charLength
    - Emit LinePair, batch at 1000 pairs → flush via AppendLinePairs
-5. Flush final line + remaining batch
+6. Flush final line + remaining batch
 ```
 
 ### Byte-Offset Navigation
@@ -284,6 +290,8 @@ GetByteOffset(lineIndex):
 | AppendLinePairs | `_writeLock`; publishes segment then increments `_lineCount` | Complete pairs only |
 | Encoding | Set once before scan publishes lines | Immutable after init |
 | BomByteLength | Set once before scan publishes lines | Immutable after init |
+| TotalFileSize | Set once before scan loop | Immutable after init |
+| BytesRead | `Volatile.Read`/`Volatile.Write` on `long` | Atomic 64-bit read; monotonically increasing during scan |
 
 **Key simplification**: No `_charLengthsWrittenUpTo` counter. Both values written together in `AppendLinePairs`. A line is either fully visible (both lengths) or not visible at all.
 

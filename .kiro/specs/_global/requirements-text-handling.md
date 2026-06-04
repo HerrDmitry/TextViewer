@@ -180,3 +180,4 @@ The flow has two phases: (1) an initial view delivered proactively by the backen
 4. WHEN the scan completes (ScanState transitions to ScanComplete), THE frontend SHALL perform one final update to set both scrollbar Scrollbar_Max values to the definitive final values
 5. IF the active tab changes while progressive polling is active, THEN THE frontend SHALL stop polling for the previously active tab and start polling for the newly active tab if its session scan is still in progress
 6. IF the active tab's session ScanState is Failed or Cancelled, THEN THE frontend SHALL stop progressive polling and set both scrollbar Scrollbar_Max values to zero
+7. WHEN a get-scroll-info poll response is received with ScanInProgress state and a progress percentage field, THE frontend SHALL store that integer (0–100) as the session's scan progress value for use by the progress bar display
